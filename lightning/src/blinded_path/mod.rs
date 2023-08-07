@@ -134,3 +134,44 @@ impl_writeable!(BlindedHop, {
 	encrypted_payload
 });
 
+/// TLVs to encode in an intermediate onion message packet's hop data. When provided in a blinded
+/// route, they are encoded into [`BlindedHop::encrypted_payload`].
+pub(crate) struct ForwardTlvs {
+	/// The node id of the next hop in the onion message's path.
+	pub(super) next_node_id: PublicKey,
+	/// Senders to a blinded path use this value to concatenate the route they find to the
+	/// introduction node with the blinded path.
+	pub(super) next_blinding_override: Option<PublicKey>,
+}
+
+/// Similar to [`ForwardTlvs`], but these TLVs are for the final node.
+pub(crate) struct ReceiveTlvs {
+	/// If `path_id` is `Some`, it is used to identify the blinded path that this onion message is
+	/// sending to. This is useful for receivers to check that said blinded path is being used in
+	/// the right context.
+	pub(super) path_id: Option<[u8; 32]>,
+}
+
+impl Writeable for ForwardTlvs {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), io::Error> {
+		// TODO: write padding
+		encode_tlv_stream!(writer, {
+			(4, self.next_node_id, required),
+			(8, self.next_blinding_override, option)
+		});
+		Ok(())
+	}
+}
+
+impl Writeable for ReceiveTlvs {
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), io::Error> {
+		// TODO: write padding
+		encode_tlv_stream!(writer, {
+			(6, self.path_id, option),
+		});
+		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod test;

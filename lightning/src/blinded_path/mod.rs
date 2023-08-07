@@ -134,3 +134,5 @@ impl_writeable!(BlindedHop, {
 	encrypted_payload
 });
 
+#[cfg(test)]
+mod test;

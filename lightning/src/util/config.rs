@@ -772,7 +772,7 @@ impl Default for UserConfig {
 			channel_handshake_config: ChannelHandshakeConfig::default(),
 			channel_handshake_limits: ChannelHandshakeLimits::default(),
 			channel_config: ChannelConfig::default(),
-			accept_forwards_to_priv_channels: false,
+			accept_forwards_to_priv_channels: true, // TODO configure somewhere else?
 			accept_inbound_channels: true,
 			manually_accept_inbound_channels: false,
 			accept_intercept_htlcs: false,

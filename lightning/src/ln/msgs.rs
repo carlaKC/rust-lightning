@@ -2063,7 +2063,7 @@ impl<NS: Deref> ReadableArgs<(Option<PublicKey>, &NS)> for InboundPayload where 
 			(10, encrypted_tlvs_opt, (option, encoding: (Vec<u8>, WithoutLength))),
 			(12, intro_node_blinding_point, option),
 			(16, payment_metadata, (option, encoding: (Vec<u8>, WithoutLength))),
-			(18, total_msat, option),
+			(18, total_msat, (option, encoding: (u64, HighZeroBytesDroppedBigSize))),
 			// See https://github.com/lightning/blips/blob/master/blip-0003.md
 			(5482373484, keysend_preimage, option)
 		});

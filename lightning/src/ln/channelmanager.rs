@@ -2778,7 +2778,7 @@ where
 		// payment logic has enough time to fail the HTLC backward before our onchain logic triggers a
 		// channel closure (see HTLC_FAIL_BACK_BUFFER rationale).
 		let current_height: u32 = self.best_block.read().unwrap().height();
-		if (outgoing_cltv_value as u64) <= current_height as u64 + HTLC_FAIL_BACK_BUFFER as u64 + 1 {
+		if (cltv_expiry as u64) <= current_height as u64 + HTLC_FAIL_BACK_BUFFER as u64 + 1 {
 			let mut err_data = Vec::with_capacity(12);
 			err_data.extend_from_slice(&amt_msat.to_be_bytes());
 			err_data.extend_from_slice(&current_height.to_be_bytes());

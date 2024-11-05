@@ -3059,6 +3059,18 @@ where
 									&msg.channel_id);
 							self.enqueue_message(&mut *get_peer_for_forwarding!(node_id)?, msg);
 						},
+						MessageSendEvent::SendClosingComplete { ref node_id, ref msg } => {
+							log_debug!(WithContext::from(&self.logger, Some(*node_id), Some(msg.channel_id), None), "Handling SendClosingComplete event in peer_handler for node {} for channel {}",
+									log_pubkey!(node_id),
+									&msg.channel_id);
+							self.enqueue_message(&mut *get_peer_for_forwarding!(node_id)?, msg);
+						},
+						MessageSendEvent::SendClosingSig { ref node_id, ref msg } => {
+							log_debug!(WithContext::from(&self.logger, Some(*node_id), Some(msg.channel_id), None), "Handling SendClosingSig event in peer_handler for node {} for channel {}",
+									log_pubkey!(node_id),
+									&msg.channel_id);
+							self.enqueue_message(&mut *get_peer_for_forwarding!(node_id)?, msg);
+						},
 						MessageSendEvent::SendShutdown { ref node_id, ref msg } => {
 							log_debug!(WithContext::from(&self.logger, Some(*node_id), Some(msg.channel_id), None), "Handling Shutdown event in peer_handler for node {} for channel {}",
 									log_pubkey!(node_id),

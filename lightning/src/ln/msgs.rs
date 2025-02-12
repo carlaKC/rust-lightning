@@ -1989,11 +1989,13 @@ impl Debug for TrampolineOnionPacket {
 	}
 }
 
+/// BOLT 4 encrypted onion error blob.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct OnionErrorPacket {
+pub struct OnionErrorPacket {
+	/// Encrypted onion error.
 	// This really should be a constant size slice, but the spec lets these things be up to 128KB?
 	// (TODO) We limit it in decode to much lower...
-	pub(crate) data: Vec<u8>,
+	pub data: Vec<u8>,
 }
 
 impl fmt::Display for DecodeError {

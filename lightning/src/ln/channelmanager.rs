@@ -336,6 +336,15 @@ pub(super) enum HTLCFailureMsg {
 	Malformed(msgs::UpdateFailMalformedHTLC),
 }
 
+impl Into<HTLCFailReason> for HTLCFailureMsg {
+	fn into(self) -> HTLCFailReason {
+		match self {
+			HTLCFailureMsg::Relay(update_fail) => HTLCFailReason::from_msg(&update_fail),
+			HTLCFailureMsg::Malformed(msg) => HTLCFailReason::from_malformed(&msg),
+		}
+	}
+}
+
 /// Stores whether we can't forward an HTLC or relevant forwarding info
 #[derive(Clone)] // See FundedChannel::revoke_and_ack for why, tl;dr: Rust bug
 pub(super) enum PendingHTLCStatus {
@@ -5721,11 +5730,11 @@ where
 			self.forward_htlcs_without_forward_event(&mut [pending_forwards]);
 			for (htlc_fail, htlc_destination) in htlc_fails.drain(..) {
 				let failure = match htlc_fail {
-					HTLCFailureMsg::Relay(fail_htlc) => HTLCForwardInfo::FailHTLC {
+					HTLCFailureMsg::Relay(ref fail_htlc) => HTLCForwardInfo::FailHTLC {
 						htlc_id: fail_htlc.htlc_id,
-						err_packet: fail_htlc.reason,
+						err_packet: fail_htlc.reason.clone(),
 					},
-					HTLCFailureMsg::Malformed(fail_malformed_htlc) => HTLCForwardInfo::FailMalformedHTLC {
+					HTLCFailureMsg::Malformed(ref fail_malformed_htlc) => HTLCForwardInfo::FailMalformedHTLC {
 						htlc_id: fail_malformed_htlc.htlc_id,
 						sha256_of_onion: fail_malformed_htlc.sha256_of_onion,
 						failure_code: fail_malformed_htlc.failure_code,
@@ -5735,6 +5744,7 @@ where
 				self.pending_events.lock().unwrap().push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: incoming_channel_id,
 					failed_next_destination: htlc_destination,
+					reason: Some(htlc_fail.into()),
 				}, None));
 			}
 		}
@@ -6926,6 +6936,7 @@ where
 				pending_events.push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: *channel_id,
 					failed_next_destination: destination,
+					reason: Some(onion_error.clone()),
 				}, None));
 			},
 		}

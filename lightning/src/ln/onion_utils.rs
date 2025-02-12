@@ -1232,13 +1232,11 @@ where
 	}
 }
 
-#[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
-#[cfg_attr(test, derive(PartialEq))]
-pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
+#[derive(Clone, PartialEq, Eq)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
+pub struct HTLCFailReason(HTLCFailReasonRepr);
 
-#[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
-#[cfg_attr(test, derive(PartialEq))]
-enum HTLCFailReasonRepr {
+#[derive(Clone, PartialEq, Eq)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
+pub enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
 	Reason { failure_code: u16, data: Vec<u8> },
 }
@@ -1323,6 +1321,10 @@ impl HTLCFailReason {
 
 	pub(super) fn from_failure_code(failure_code: u16) -> Self {
 		Self::reason(failure_code, Vec::new())
+	}
+
+	pub(super) fn from_malformed(msg: &msgs::UpdateFailMalformedHTLC) -> Self {
+		Self::reason(msg.failure_code, msg.sha256_of_onion.to_vec())
 	}
 
 	pub(super) fn from_msg(msg: &msgs::UpdateFailHTLC) -> Self {

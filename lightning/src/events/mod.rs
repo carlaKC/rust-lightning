@@ -23,6 +23,7 @@ use crate::blinded_path::payment::{Bolt12OfferContext, Bolt12RefundContext, Paym
 use crate::chain::transaction;
 use crate::ln::channelmanager::{InterceptId, PaymentId, RecipientOnionFields};
 use crate::ln::channel::FUNDING_CONF_DEADLINE_BLOCKS;
+use crate::ln::onion_utils::HTLCFailReason;
 use crate::types::features::ChannelTypeFeatures;
 use crate::ln::msgs;
 use crate::ln::types::ChannelId;
@@ -1441,6 +1442,10 @@ pub enum Event {
 		prev_channel_id: ChannelId,
 		/// Destination of the HTLC that failed to be processed.
 		failed_next_destination: HTLCDestination,
+		/// The cause of the processing failure.
+		///
+		/// This field will be `None` for objects serialized prior to LDK 0.1.1.
+		reason: Option<HTLCFailReason>,
 	},
 	/// Indicates that a transaction originating from LDK needs to have its fee bumped. This event
 	/// requires confirmed external funds to be readily available to spend.
@@ -1743,10 +1748,11 @@ impl Writeable for Event {
 					(8, path.blinded_tail, option),
 				})
 			},
-			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failed_next_destination } => {
+			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failed_next_destination, ref reason} => {
 				25u8.write(writer)?;
 				write_tlv_fields!(writer, {
 					(0, prev_channel_id, required),
+					(1, reason, option),
 					(2, failed_next_destination, required),
 				})
 			},
@@ -2190,13 +2196,16 @@ impl MaybeReadable for Event {
 				let mut f = || {
 					let mut prev_channel_id = ChannelId::new_zero();
 					let mut failed_next_destination_opt = UpgradableRequired(None);
+					let mut reason = None;
 					read_tlv_fields!(reader, {
 						(0, prev_channel_id, required),
+						(1, reason, option),
 						(2, failed_next_destination_opt, upgradable_required),
 					});
 					Ok(Some(Event::HTLCHandlingFailed {
 						prev_channel_id,
 						failed_next_destination: _init_tlv_based_struct_field!(failed_next_destination_opt, upgradable_required),
+						reason,
 					}))
 				};
 				f()

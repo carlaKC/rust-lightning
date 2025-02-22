@@ -4912,6 +4912,13 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 		let channel_type = &mut funding.channel_transaction_parameters.channel_type_features;
 		if channel_type.supports_anchors_zero_fee_htlc_tx() {
 			channel_type.clear_anchors_zero_fee_htlc_tx();
+			channel_type.set_anchors_zero_fee_htlc_tx_required();
+
+			self.feerate_per_kw = fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::AnchorChannelFee);
+			debug_assert!(!channel_type.supports_anchor_zero_fee_commitments());
+			debug_assert!(channel_type.supports_anchors_nonzero_fee_htlc_tx());
+		} else if channel_type.supports_anchors_zero_fee_htlc_tx() {
+			channel_type.clear_anchors_zero_fee_htlc_tx();
 			self.feerate_per_kw = fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee);
 			assert!(!channel_type.supports_anchors_nonzero_fee_htlc_tx());
 		} else if channel_type.supports_scid_privacy() {
@@ -10558,10 +10565,14 @@ fn get_initial_channel_type(config: &UserConfig, their_features: &InitFeatures) 
 		ret.set_scid_privacy_required();
 	}
 
-	// Optionally, if the user would like to negotiate the `anchors_zero_fee_htlc_tx` option, we
-	// set it now. If they don't understand it, we'll fall back to our default of
-	// `only_static_remotekey`.
-	if config.channel_handshake_config.negotiate_anchors_zero_fee_htlc_tx &&
+	// Optionally, if the user would like to negotiate the `negotiate_zero_fee_commitments` option,
+	// we set it now. If they don't understand it (or we don't want it), we check the same
+	// conditions for `option_anchors_zero_fee_htlc_tx`. The counterparty can still refuse the
+	// channel and we'll try to fall back (all the way to `only_static_remotekey`).
+	if config.channel_handshake_config.negotiate_anchor_zero_fee_commitments &&
+		their_features.supports_anchor_zero_fee_commitments() {
+		ret.set_anchor_zero_fee_commitments_required();
+	} else if config.channel_handshake_config.negotiate_anchors_zero_fee_htlc_tx &&
 		their_features.supports_anchors_zero_fee_htlc_tx() {
 		ret.set_anchors_zero_fee_htlc_tx_required();
 	}

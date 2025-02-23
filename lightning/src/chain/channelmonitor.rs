@@ -3744,7 +3744,6 @@ impl<Signer: EcdsaChannelSigner> ChannelMonitorImpl<Signer> {
 				if outp.script_pubkey == revokeable_p2wsh {
 					let revk_outp = RevokedOutput::build(
 						per_commitment_point, per_commitment_key, outp.value,
-						self.funding.channel_parameters.channel_type_features.supports_anchors_zero_fee_htlc_tx(),
 						self.funding.channel_parameters.clone(),
 					);
 					let justice_package = PackageTemplate::build_package(
@@ -3942,7 +3941,7 @@ impl<Signer: EcdsaChannelSigner> ChannelMonitorImpl<Signer> {
 			if input.previous_output.txid == *commitment_txid && input.witness.len() == 5 && tx.output.get(idx).is_some() {
 				log_error!(logger, "Got broadcast of revoked counterparty HTLC transaction, spending {}:{}", htlc_txid, idx);
 				let revk_outp = RevokedOutput::build(
-					per_commitment_point, per_commitment_key, tx.output[idx].value, false,
+					per_commitment_point, per_commitment_key, tx.output[idx].value,
 					self.funding.channel_parameters.clone(),
 				);
 				let justice_package = PackageTemplate::build_package(

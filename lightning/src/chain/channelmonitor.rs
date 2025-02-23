@@ -50,7 +50,7 @@ use crate::ln::chan_utils::{
 	self, ChannelTransactionParameters, CommitmentTransaction, CounterpartyCommitmentSecrets,
 	HTLCClaim, HTLCOutputInCommitment, HolderCommitmentTransaction,
 };
-use crate::ln::channel::INITIAL_COMMITMENT_NUMBER;
+use crate::ln::channel::{INITIAL_COMMITMENT_NUMBER, ANCHOR_OUTPUT_VALUE_SATOSHI};
 use crate::ln::channel_keys::{
 	DelayedPaymentBasepoint, DelayedPaymentKey, HtlcBasepoint, HtlcKey, RevocationBasepoint,
 	RevocationKey,
@@ -4207,6 +4207,7 @@ impl<Signer: EcdsaChannelSigner> ChannelMonitorImpl<Signer> {
 								txid: commitment_txid,
 								vout: anchor_output_idx,
 							},
+							value: Amount::from_sat(ANCHOR_OUTPUT_VALUE_SATOSHI),
 						},
 						pending_htlcs: pending_nondust_htlcs,
 					}));

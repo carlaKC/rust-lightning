@@ -22,7 +22,6 @@ use crate::ln::chan_utils::{
 	shared_anchor_script_pubkey, HTLCOutputInCommitment, ANCHOR_INPUT_WITNESS_WEIGHT,
 	HTLC_SUCCESS_INPUT_ANCHOR_WITNESS_WEIGHT, HTLC_TIMEOUT_INPUT_ANCHOR_WITNESS_WEIGHT,
 };
-use crate::ln::channel::ANCHOR_OUTPUT_VALUE_SATOSHI;
 use crate::ln::types::ChannelId;
 use crate::prelude::*;
 use crate::sign::ecdsa::EcdsaChannelSigner;
@@ -59,6 +58,8 @@ pub struct AnchorDescriptor {
 	/// The transaction input's outpoint corresponding to the commitment transaction's anchor
 	/// output.
 	pub outpoint: OutPoint,
+	/// Zero-fee-commitment anchors have variable value, which is tracked here.
+	pub value: Amount,
 }
 
 impl AnchorDescriptor {
@@ -75,7 +76,7 @@ impl AnchorDescriptor {
 			assert!(tx_params.channel_type_features.supports_anchor_zero_fee_commitments());
 			shared_anchor_script_pubkey()
 		};
-		TxOut { script_pubkey, value: Amount::from_sat(ANCHOR_OUTPUT_VALUE_SATOSHI) }
+		TxOut { script_pubkey, value: self.value }
 	}
 
 	/// Returns the unsigned transaction input spending the anchor output in the commitment
@@ -964,6 +965,7 @@ mod tests {
 	use super::*;
 
 	use crate::io::Cursor;
+	use crate::ln::channel::ANCHOR_OUTPUT_VALUE_SATOSHI;
 	use crate::ln::chan_utils::ChannelTransactionParameters;
 	use crate::sign::KeysManager;
 	use crate::types::features::ChannelTypeFeatures;
@@ -1083,6 +1085,7 @@ mod tests {
 					transaction_parameters,
 				},
 				outpoint: OutPoint { txid: Txid::from_byte_array([42; 32]), vout: 0 },
+				value: Amount::from_sat(ANCHOR_OUTPUT_VALUE_SATOSHI),
 			},
 			pending_htlcs: Vec::new(),
 		});

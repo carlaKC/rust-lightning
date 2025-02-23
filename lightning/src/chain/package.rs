@@ -145,7 +145,6 @@ pub(crate) struct RevokedOutput {
 	weight: u64,
 	amount: Amount,
 	on_counterparty_tx_csv: u16,
-	is_counterparty_balance_on_anchors: Option<()>,
 	channel_parameters: Option<ChannelTransactionParameters>,
 	// Added in LDK 0.1.4/0.2 and always set since.
 	outpoint_confirmation_height: Option<u32>,
@@ -155,7 +154,7 @@ impl RevokedOutput {
 	#[rustfmt::skip]
 	pub(crate) fn build(
 		per_commitment_point: PublicKey, per_commitment_key: SecretKey, amount: Amount,
-		is_counterparty_balance_on_anchors: bool, channel_parameters: ChannelTransactionParameters,
+		channel_parameters: ChannelTransactionParameters,
 		outpoint_confirmation_height: u32,
 	) -> Self {
 		let directed_params = channel_parameters.as_counterparty_broadcastable();
@@ -171,7 +170,6 @@ impl RevokedOutput {
 			weight: WEIGHT_REVOKED_OUTPUT,
 			amount,
 			on_counterparty_tx_csv,
-			is_counterparty_balance_on_anchors: if is_counterparty_balance_on_anchors { Some(()) } else { None },
 			channel_parameters: Some(channel_parameters),
 			outpoint_confirmation_height: Some(outpoint_confirmation_height),
 		}
@@ -187,7 +185,7 @@ impl_writeable_tlv_based!(RevokedOutput, {
 	(8, weight, required),
 	(10, amount, required),
 	(12, on_counterparty_tx_csv, required),
-	(14, is_counterparty_balance_on_anchors, option),
+	(14, is_counterparty_balance_on_anchors, (legacy, (), |_| Some(()))),
 	(15, channel_parameters, (option: ReadableArgs, None)), // Added in 0.2.
 });
 
@@ -1778,7 +1776,7 @@ mod tests {
 
 	#[rustfmt::skip]
 	macro_rules! dumb_revk_output {
-		($is_counterparty_balance_on_anchors: expr) => {
+		() => {
 			{
 				let secp_ctx = Secp256k1::new();
 				let dumb_scalar = SecretKey::from_slice(&<Vec<u8>>::from_hex("0101010101010101010101010101010101010101010101010101010101010101").unwrap()[..]).unwrap();
@@ -2089,9 +2087,9 @@ mod tests {
 	#[test]
 	#[rustfmt::skip]
 	fn test_package_split_malleable() {
-		let revk_outp_one = dumb_revk_output!(false);
-		let revk_outp_two = dumb_revk_output!(false);
-		let revk_outp_three = dumb_revk_output!(false);
+		let revk_outp_one = dumb_revk_output!();
+		let revk_outp_two = dumb_revk_output!();
+		let revk_outp_three = dumb_revk_output!();
 
 		let mut package_one = PackageTemplate::build_package(fake_txid(1), 0, revk_outp_one, 1100);
 		let package_two = PackageTemplate::build_package(fake_txid(1), 1, revk_outp_two, 1100);
@@ -2123,7 +2121,7 @@ mod tests {
 
 	#[test]
 	fn test_package_timer() {
-		let revk_outp = dumb_revk_output!(false);
+		let revk_outp = dumb_revk_output!();
 
 		let mut package = PackageTemplate::build_package(fake_txid(1), 0, revk_outp, 1000);
 		assert_eq!(package.timer(), 0);
@@ -2147,7 +2145,7 @@ mod tests {
 		let weight_sans_output = (4 + 4 + 1 + 36 + 4 + 1 + 1 + 8 + 1) * WITNESS_SCALE_FACTOR as u64 + 2;
 
 		{
-			let revk_outp = dumb_revk_output!(false);
+			let revk_outp = dumb_revk_output!();
 			let package = PackageTemplate::build_package(fake_txid(1), 0, revk_outp, 0);
 			assert_eq!(package.package_weight(&ScriptBuf::new()),  weight_sans_output + WEIGHT_REVOKED_OUTPUT);
 		}

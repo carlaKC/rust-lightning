@@ -1232,6 +1232,66 @@ where
 	}
 }
 
+/// Describes the reasons for failed HTLC forwards or receives at our node.
+pub(super) enum LocalHTLCFailure {
+	DustLimitHolder,
+	DustLimitCounterparty,
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelDisabled,
+	ChannelNotReady,
+	HTLCAmountBelowMinimum,
+	InsufficientFees,
+	IncorrectCLTVExpiry,
+	UnknownChannel,
+	ExpiryTooSoon,
+	ExpiryTooFar,
+}
+
+impl LocalHTLCFailure {
+	/// The BOLT04 falure code for the local HTLC failure.
+	pub(super) fn failure_code(&self) -> u16 {
+		match self {
+			LocalHTLCFailure::DustLimitHolder
+			| LocalHTLCFailure::DustLimitCounterparty
+			| LocalHTLCFailure::FeeSpikeBuffer
+			| LocalHTLCFailure::ChannelNotReady => 0x1000 | 7,
+			LocalHTLCFailure::ShutdownSent => 0x4000 | 8,
+			LocalHTLCFailure::PrivateChannelForward
+			| LocalHTLCFailure::RealSCIDForward
+			| LocalHTLCFailure::UnknownChannel => 0x4000 | 10,
+			LocalHTLCFailure::ChannelDisabled => 0x1000 | 20,
+			LocalHTLCFailure::HTLCAmountBelowMinimum => 0x1000 | 11,
+			LocalHTLCFailure::InsufficientFees => 0x1000 | 12,
+			LocalHTLCFailure::IncorrectCLTVExpiry => 0x1000 | 13,
+			LocalHTLCFailure::ExpiryTooSoon => 0x1000 | 14,
+			LocalHTLCFailure::ExpiryTooFar => 21,
+		}
+	}
+
+	/// A human readable message for the failure.
+	pub(super) fn msg(&self) -> &'static str {
+		match self{
+			LocalHTLCFailure::DustLimitHolder => "Exceeded our dust exposure limit on holder commitment",
+			LocalHTLCFailure::DustLimitCounterparty => "Exceeded our dust exposure limit on counterparty commitment",
+			LocalHTLCFailure::FeeSpikeBuffer => "Fee spike buffer violation",
+			LocalHTLCFailure::ChannelNotReady => "Forwarding channel is not in a ready state",
+			LocalHTLCFailure::ShutdownSent => "Shutdown was already sent",
+			LocalHTLCFailure::PrivateChannelForward =>  "Refusing to forward to a privated channel based on our config",
+			LocalHTLCFailure::RealSCIDForward =>  "Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
+			LocalHTLCFailure::ChannelDisabled =>  "Forwarding channel has been disconnected for some time",
+			LocalHTLCFailure::HTLCAmountBelowMinimum =>  "HTLC amount was below the htlc_minimum_msat",
+			LocalHTLCFailure::InsufficientFees =>  "Prior hop has deviated from specified fees parameters or origin node has obsolete ones",
+			LocalHTLCFailure::IncorrectCLTVExpiry =>  "Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
+			LocalHTLCFailure::UnknownChannel =>  "Don't have available channel for forwarding as requested",
+			LocalHTLCFailure::ExpiryTooSoon =>  "CLTV expiry is too close",
+			LocalHTLCFailure::ExpiryTooFar =>  "CLTV expiry is too far in the future",
+		}
+	}
+}
+
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
 pub(super) struct HTLCFailReason(HTLCFailReasonRepr);

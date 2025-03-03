@@ -59,7 +59,7 @@ use crate::routing::router::{BlindedTail, FixedRouter, InFlightHtlcs, Path, Paye
 use crate::ln::onion_payment::{check_incoming_htlc_cltv, create_recv_pending_htlc_info, create_fwd_pending_htlc_info, decode_incoming_update_add_htlc_onion, InboundHTLCErr, NextPacketDetails};
 use crate::ln::msgs;
 use crate::ln::onion_utils;
-use crate::ln::onion_utils::{HTLCFailReason, INVALID_ONION_BLINDING};
+use crate::ln::onion_utils::{HTLCFailReason, INVALID_ONION_BLINDING, LocalHTLCFailure};
 use crate::ln::msgs::{ChannelMessageHandler, CommitmentUpdate, DecodeError, LightningError};
 #[cfg(test)]
 use crate::ln::outbound_payment;
@@ -4235,18 +4235,18 @@ where
 
 	fn can_forward_htlc_to_outgoing_channel(
 		&self, chan: &mut FundedChannel<SP>, msg: &msgs::UpdateAddHTLC, next_packet: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), LocalHTLCFailure> {
 		if !chan.context.should_announce() && !self.default_configuration.accept_forwards_to_priv_channels {
 			// Note that the behavior here should be identical to the above block - we
 			// should NOT reveal the existence or non-existence of a private channel if
 			// we don't allow forwards outbound over them.
-			return Err(("Refusing to forward to a private channel based on our config.", 0x4000 | 10));
+			return Err(LocalHTLCFailure::PrivateChannelForward);
 		}
 		if chan.context.get_channel_type().supports_scid_privacy() && next_packet.outgoing_scid != chan.context.outbound_scid_alias() {
 			// `option_scid_alias` (referred to in LDK as `scid_privacy`) means
 			// "refuse to forward unless the SCID alias was used", so we pretend
 			// we don't have the channel here.
-			return Err(("Refusing to forward over real channel SCID as our counterparty requested.", 0x4000 | 10));
+			return Err(LocalHTLCFailure::RealSCIDForward);
 		}
 
 		// Note that we could technically not return an error yet here and just hope
@@ -4257,18 +4257,16 @@ where
 		if !chan.context.is_live() {
 			if !chan.context.is_enabled() {
 				// channel_disabled
-				return Err(("Forwarding channel has been disconnected for some time.", 0x1000 | 20));
+				return Err(LocalHTLCFailure::ChannelDisabled);
 			} else {
 				// temporary_channel_failure
-				return Err(("Forwarding channel is not in a ready state.", 0x1000 | 7));
+				return Err(LocalHTLCFailure::ChannelNotReady);
 			}
 		}
 		if next_packet.outgoing_amt_msat < chan.context.get_counterparty_htlc_minimum_msat() { // amount_below_minimum
-			return Err(("HTLC amount was below the htlc_minimum_msat", 0x1000 | 11));
+			return Err(LocalHTLCFailure::HTLCAmountBelowMinimum);
 		}
-		if let Err((err, code)) = chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value) {
-			return Err((err, code));
-		}
+		chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value)?;
 
 		Ok(())
 	}
@@ -4297,7 +4295,7 @@ where
 
 	fn can_forward_htlc(
 		&self, msg: &msgs::UpdateAddHTLC, next_packet_details: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), LocalHTLCFailure> {
 		match self.do_funded_channel_callback(next_packet_details.outgoing_scid, |chan: &mut FundedChannel<SP>| {
 			self.can_forward_htlc_to_outgoing_channel(chan, msg, next_packet_details)
 		}) {
@@ -4310,28 +4308,24 @@ where
 					fake_scid::is_valid_intercept(&self.fake_scid_rand_bytes, next_packet_details.outgoing_scid, &self.chain_hash)) ||
 					fake_scid::is_valid_phantom(&self.fake_scid_rand_bytes, next_packet_details.outgoing_scid, &self.chain_hash)
 				{} else {
-					return Err(("Don't have available channel for forwarding as requested.", 0x4000 | 10));
+					return Err(LocalHTLCFailure::UnknownChannel);
 				}
 			}
 		}
 
 		let cur_height = self.best_block.read().unwrap().height + 1;
-		if let Err((err_msg, err_code)) = check_incoming_htlc_cltv(
-			cur_height, next_packet_details.outgoing_cltv_value, msg.cltv_expiry
-		) {
-			return Err((err_msg, err_code));
-		}
+		check_incoming_htlc_cltv(cur_height, next_packet_details.outgoing_cltv_value, msg.cltv_expiry)?;
 
 		Ok(())
 	}
 
 	fn htlc_failure_from_update_add_err(
-		&self, msg: &msgs::UpdateAddHTLC, counterparty_node_id: &PublicKey, err_msg: &'static str,
-		err_code: u16, is_intro_node_blinded_forward: bool,
-		shared_secret: &[u8; 32]
+		&self, msg: &msgs::UpdateAddHTLC, counterparty_node_id: &PublicKey, failure: LocalHTLCFailure,
+		is_intro_node_blinded_forward: bool, shared_secret: &[u8; 32]
 	) -> HTLCFailureMsg {
 		// at capacity, we write fields `htlc_msat` and `len`
 		let mut res = VecWriter(Vec::with_capacity(8 + 2));
+		let err_code = failure.failure_code();
 		if err_code & 0x1000 == 0x1000 {
 			if err_code == 0x1000 | 11 || err_code == 0x1000 | 12 {
 				msg.amount_msat.write(&mut res).expect("Writes cannot fail");
@@ -4349,7 +4343,7 @@ where
 
 		log_info!(
 			WithContext::from(&self.logger, Some(*counterparty_node_id), Some(msg.channel_id), Some(msg.payment_hash)),
-			"Failed to accept/forward incoming HTLC: {}", err_msg
+			"Failed to accept/forward incoming HTLC: {}", failure.msg(),
 		);
 		// If `msg.blinding_point` is set, we must always fail with malformed.
 		if msg.blinding_point.is_some() {
@@ -5670,9 +5664,9 @@ where
 					)
 				}) {
 					Some(Ok(_)) => {},
-					Some(Err((err, code))) => {
+					Some(Err(failure)) => {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
-							&update_add_htlc, &incoming_counterparty_node_id, err, code,
+							&update_add_htlc, &incoming_counterparty_node_id, failure,
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
@@ -5685,11 +5679,11 @@ where
 
 				// Now process the HTLC on the outgoing channel if it's a forward.
 				if let Some(next_packet_details) = next_packet_details_opt.as_ref() {
-					if let Err((err, code)) = self.can_forward_htlc(
+					if let Err(failure) = self.can_forward_htlc(
 						&update_add_htlc, next_packet_details
 					) {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
-							&update_add_htlc, &incoming_counterparty_node_id, err, code,
+							&update_add_htlc, &incoming_counterparty_node_id, failure,
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);

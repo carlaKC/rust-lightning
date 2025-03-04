@@ -1258,6 +1258,79 @@ where
 	}
 }
 
+#[derive(Eq, PartialEq)]
+pub(super) enum LocalHTLCFailure {
+	FailureCode(u16),
+	FailureReason(LocalHTLCFailureReason),
+}
+
+impl LocalHTLCFailure {
+	pub(super) fn failure_code(&self) -> u16 {
+		match self {
+			Self::FailureCode(code) => *code,
+			Self::FailureReason(reason) => reason.failure_code(),
+		}
+	}
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(super) enum LocalHTLCFailureReason {
+	DustLimitHolder,
+	DustLimitCounterparty,
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	ChannelClosed,
+	InterceptFailed,
+	DupliateIntercept,
+	HTLCExpiryTimeout,
+}
+
+impl Into<LocalHTLCFailure> for LocalHTLCFailureReason {
+	fn into(self) -> LocalHTLCFailure {
+		LocalHTLCFailure::FailureReason(self)
+	}
+}
+
+impl Into<LocalHTLCFailure> for u16 {
+	fn into(self) -> LocalHTLCFailure {
+		LocalHTLCFailure::FailureCode(self)
+	}
+}
+
+impl LocalHTLCFailureReason {
+	fn failure_code(&self) -> u16 {
+		match self {
+			Self::DustLimitHolder
+			| Self::DustLimitCounterparty
+			| Self::FeeSpikeBuffer
+			| Self::ChannelNotReady => 0x1000 | 7,
+			Self::ShutdownSent | Self::ChannelClosed => 0x4000 | 8,
+			Self::PrivateChannelForward
+			| Self::RealSCIDForward
+			| Self::InterceptFailed
+			| Self::DupliateIntercept => 0x4000 | 10,
+			Self::HTLCExpiryTimeout => 0x4000 | 15,
+		}
+	}
+}
+
+impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
+	(0, DustLimitHolder) => {},
+	(1, DustLimitCounterparty) => {},
+	(2, FeeSpikeBuffer) => {},
+	(3, ShutdownSent) => {},
+	(4, PrivateChannelForward) => {},
+	(5, RealSCIDForward) => {},
+	(6, ChannelNotReady) => {},
+	(7, ChannelClosed) => {},
+	(8, InterceptFailed) => {},
+	(9, DupliateIntercept) => {},
+	(10, HTLCExpiryTimeout) => {},
+);
+
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
 pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
@@ -1266,7 +1339,7 @@ pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
 #[cfg_attr(test, derive(PartialEq))]
 enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
-	Reason { failure_code: u16, data: Vec<u8> },
+	Reason { failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailureReason> },
 }
 
 impl core::fmt::Debug for HTLCFailReason {
@@ -1299,13 +1372,14 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 	},
 	(1, Reason) => {
 		(0, failure_code, required),
+		(1, failure_reason, option),
 		(2, data, required_vec),
 	},
 );
 
 impl HTLCFailReason {
 	#[rustfmt::skip]
-	pub(super) fn reason(failure_code: u16, data: Vec<u8>) -> Self {
+	fn reason(failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailureReason>) -> Self {
 		const BADONION: u16 = 0x8000;
 		const PERM: u16 = 0x4000;
 		const NODE: u16 = 0x2000;
@@ -1344,11 +1418,23 @@ impl HTLCFailReason {
 		}
 		else { debug_assert!(false, "Unknown failure code: {}", failure_code) }
 
-		Self(HTLCFailReasonRepr::Reason { failure_code, data })
+		Self(HTLCFailReasonRepr::Reason { failure_code, data, failure_reason})
 	}
 
-	pub(super) fn from_failure_code(failure_code: u16) -> Self {
-		Self::reason(failure_code, Vec::new())
+	/// Creates a [`HTLCFailReason`] from a [`LocalHTLCFailure`], including additional failure
+	/// information from the failure if it would otherwise be erased by the BOLT04 failure code.
+	pub(super) fn with_error_data(failure: LocalHTLCFailure, data: Vec<u8>) -> Self {
+		match failure {
+			LocalHTLCFailure::FailureCode(code) => Self::reason(code, data, None),
+			LocalHTLCFailure::FailureReason(reason) => {
+				Self::reason(reason.failure_code(), data, Some(reason))
+			},
+		}
+	}
+
+	/// Creates a [`HTLCFailReason`] without any error data to propagate back to the original sender.
+	pub(super) fn from_failure(htlc_failure: LocalHTLCFailure) -> Self {
+		Self::with_error_data(htlc_failure, Vec::new())
 	}
 
 	pub(super) fn from_msg(msg: &msgs::UpdateFailHTLC) -> Self {
@@ -1359,7 +1445,7 @@ impl HTLCFailReason {
 		&self, incoming_packet_shared_secret: &[u8; 32], phantom_shared_secret: &Option<[u8; 32]>,
 	) -> msgs::OnionErrorPacket {
 		match self.0 {
-			HTLCFailReasonRepr::Reason { ref failure_code, ref data } => {
+			HTLCFailReasonRepr::Reason { ref failure_code, ref data, .. } => {
 				if let Some(phantom_ss) = phantom_shared_secret {
 					let phantom_packet =
 						build_failure_packet(phantom_ss, *failure_code, &data[..]).encode();

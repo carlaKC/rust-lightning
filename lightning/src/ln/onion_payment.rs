@@ -24,6 +24,8 @@ use crate::prelude::*;
 
 use core::ops::Deref;
 
+use super::onion_utils::LocalHTLCFailure;
+
 /// Invalid inbound onion payment.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct InboundHTLCErr {
@@ -320,7 +322,7 @@ where
 			) {
 				return Err(InboundHTLCErr {
 					msg: err_msg,
-					err_code: code,
+					err_code: code.failure_code(),
 					err_data: Vec::new(),
 				});
 			}
@@ -455,21 +457,21 @@ where
 
 pub(super) fn check_incoming_htlc_cltv(
 	cur_height: u32, outgoing_cltv_value: u32, cltv_expiry: u32
-) -> Result<(), (&'static str, u16)> {
+) -> Result<(), (&'static str, LocalHTLCFailure)> {
 	if (cltv_expiry as u64) < (outgoing_cltv_value) as u64 + MIN_CLTV_EXPIRY_DELTA as u64 {
 		return Err((
 			"Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
-			0x1000 | 13, // incorrect_cltv_expiry
+			LocalHTLCFailure::IncorrectCLTVExpiry,
 		));
 	}
 	// Theoretically, channel counterparty shouldn't send us a HTLC expiring now,
 	// but we want to be robust wrt to counterparty packet sanitization (see
 	// HTLC_FAIL_BACK_BUFFER rationale).
 	if cltv_expiry <= cur_height + HTLC_FAIL_BACK_BUFFER as u32 { // expiry_too_soon
-		return Err(("CLTV expiry is too close", 0x1000 | 14));
+		return Err(("CLTV expiry is too close", LocalHTLCFailure::CLTVExpiryTooClose));
 	}
 	if cltv_expiry > cur_height + CLTV_FAR_FAR_AWAY as u32 { // expiry_too_far
-		return Err(("CLTV expiry is too far in the future", 21));
+		return Err(("CLTV expiry is too far in the future", LocalHTLCFailure::CLTVExpiryTooFar));
 	}
 	// If the HTLC expires ~now, don't bother trying to forward it to our
 	// counterparty. They should fail it anyway, but we don't want to bother with
@@ -480,7 +482,7 @@ pub(super) fn check_incoming_htlc_cltv(
 	// but there is no need to do that, and since we're a bit conservative with our
 	// risk threshold it just results in failing to forward payments.
 	if (outgoing_cltv_value) as u64 <= (cur_height + LATENCY_GRACE_PERIOD_BLOCKS) as u64 {
-		return Err(("Outgoing CLTV value is too soon", 0x1000 | 14));
+		return Err(("Outgoing CLTV value is too soon", LocalHTLCFailure::CLTVExpiryTooClose));
 	}
 
 	Ok(())

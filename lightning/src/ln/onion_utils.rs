@@ -1258,6 +1258,85 @@ where
 	}
 }
 
+pub(super) struct HTLCFailureDetails {
+	pub(super) failure_code: u16,
+	pub(super) failure_reason: Option<LocalHTLCFailure>,
+	pub(super) msg: &'static str,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub(super) enum LocalHTLCFailure {
+	DustLimitHolder,
+	DustLimitCounterparty,
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	ChannelClosed,
+	InterceptFailed,
+	DupliateIntercept,
+}
+
+impl LocalHTLCFailure {
+	fn failure_code(&self) -> u16 {
+		match self {
+			Self::DustLimitHolder
+			| Self::DustLimitCounterparty
+			| Self::FeeSpikeBuffer
+			| Self::ChannelNotReady => 0x1000 | 7,
+			Self::ShutdownSent | Self::ChannelClosed => 0x4000 | 8,
+			Self::PrivateChannelForward
+			| Self::RealSCIDForward
+			| Self::InterceptFailed
+			| Self::DupliateIntercept => 0x4000 | 10,
+		}
+	}
+
+	fn msg(&self) -> &'static str {
+		match self {
+			Self::DustLimitCounterparty => {
+				"Exceeded our total dust exposure limit on counterparty commitment tx"
+			},
+			Self::DustLimitHolder => {
+				"Exceeded our total dust exposure limit on holder commitment tx"
+			},
+			Self::FeeSpikeBuffer => "Fee spike buffer violation",
+			Self::ShutdownSent => "Shutdown was already sent",
+			Self::PrivateChannelForward => {
+				"Refusing to forward to a private channel based on our config"
+			},
+			Self::RealSCIDForward => {
+				"Refusing to forward over real channel SCID as our counterparty requested"
+			},
+			Self::ChannelNotReady => "Forwarding channel is not in a ready state",
+			Self::ChannelClosed => "Channel closed before HTLC resolution",
+			Self::InterceptFailed => "Intercepted htlc manually failed",
+			Self::DupliateIntercept => "Duplicate HTLC intercept",
+		}
+	}
+}
+
+impl Into<HTLCFailureDetails> for LocalHTLCFailure {
+	fn into(self) -> HTLCFailureDetails {
+		let msg = self.msg();
+		HTLCFailureDetails { failure_code: self.failure_code(), failure_reason: Some(self), msg }
+	}
+}
+
+impl_writeable_tlv_based_enum!(LocalHTLCFailure,
+	(0, DustLimitHolder) => {},
+	(1, DustLimitCounterparty) => {},
+	(2, FeeSpikeBuffer) => {},
+	(3, ShutdownSent) => {},
+	(4, PrivateChannelForward) => {},
+	(5, RealSCIDForward) => {},
+	(6, ChannelNotReady) => {},
+	(7, ChannelClosed) => {},
+	(8, InterceptFailed) => {},
+	(9, DupliateIntercept) => {},
+);
+
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
 pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
@@ -1266,7 +1345,7 @@ pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
 #[cfg_attr(test, derive(PartialEq))]
 enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
-	Reason { failure_code: u16, data: Vec<u8> },
+	Reason { failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailure> },
 }
 
 impl core::fmt::Debug for HTLCFailReason {
@@ -1299,13 +1378,15 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 	},
 	(1, Reason) => {
 		(0, failure_code, required),
+		(1, failure_reason, option),
 		(2, data, required_vec),
 	},
 );
 
 impl HTLCFailReason {
 	#[rustfmt::skip]
-	pub(super) fn reason(failure_code: u16, data: Vec<u8>) -> Self {
+
+	fn inner_reason(failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailure>) -> Self {
 		const BADONION: u16 = 0x8000;
 		const PERM: u16 = 0x4000;
 		const NODE: u16 = 0x2000;
@@ -1344,11 +1425,23 @@ impl HTLCFailReason {
 		}
 		else { debug_assert!(false, "Unknown failure code: {}", failure_code) }
 
-		Self(HTLCFailReasonRepr::Reason { failure_code, data })
+		Self(HTLCFailReasonRepr::Reason { failure_code, data, failure_reason})
 	}
 
+	pub(super) fn reason(failure_code: u16, data: Vec<u8>) -> Self {
+		Self::inner_reason(failure_code, data, None)
+	}
+
+	/// Creates a [`HTLCFailReason`] from a BOLT04 error code with no error data.
 	pub(super) fn from_failure_code(failure_code: u16) -> Self {
 		Self::reason(failure_code, Vec::new())
+	}
+
+	/// Creates a ['HTLCFailReason'] with additional error information that is useful to the end
+	/// user. Should be used when the BOLT04 error code erases interesting details about the
+	/// failure.
+	pub(super) fn from_failure_reason(htlc_failure: LocalHTLCFailure) -> Self {
+		Self::inner_reason(htlc_failure.failure_code(), Vec::new(), Some(htlc_failure))
 	}
 
 	pub(super) fn from_msg(msg: &msgs::UpdateFailHTLC) -> Self {
@@ -1359,7 +1452,7 @@ impl HTLCFailReason {
 		&self, incoming_packet_shared_secret: &[u8; 32], phantom_shared_secret: &Option<[u8; 32]>,
 	) -> msgs::OnionErrorPacket {
 		match self.0 {
-			HTLCFailReasonRepr::Reason { ref failure_code, ref data } => {
+			HTLCFailReasonRepr::Reason { ref failure_code, ref data, .. } => {
 				if let Some(phantom_ss) = phantom_shared_secret {
 					let phantom_packet =
 						build_failure_packet(phantom_ss, *failure_code, &data[..]).encode();

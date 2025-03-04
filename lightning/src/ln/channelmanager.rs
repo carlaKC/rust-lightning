@@ -62,7 +62,7 @@ use crate::routing::router::{FixedRouter, Route};
 use crate::ln::onion_payment::{check_incoming_htlc_cltv, create_recv_pending_htlc_info, create_fwd_pending_htlc_info, decode_incoming_update_add_htlc_onion, InboundHTLCErr, NextPacketDetails};
 use crate::ln::msgs;
 use crate::ln::onion_utils;
-use crate::ln::onion_utils::{HTLCFailReason, INVALID_ONION_BLINDING};
+use crate::ln::onion_utils::{HTLCFailReason, INVALID_ONION_BLINDING, LocalHTLCFailure};
 use crate::ln::msgs::{ChannelMessageHandler, CommitmentUpdate, DecodeError, LightningError};
 #[cfg(test)]
 use crate::ln::outbound_payment;
@@ -133,6 +133,8 @@ pub use crate::ln::outbound_payment::{Bolt12PaymentError, ProbeSendFailure, Retr
 #[cfg(any(test, feature = "_externalize_tests"))]
 pub(crate) use crate::ln::outbound_payment::PaymentSendFailure;
 use crate::ln::script::ShutdownScript;
+
+use super::onion_utils::HTLCFailureDetails;
 
 // We hold various information about HTLC relay in the HTLC objects in Channel itself:
 //
@@ -3944,7 +3946,7 @@ where
 		}
 
 		for htlc_source in failed_htlcs.drain(..) {
-			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
+			let reason = HTLCFailReason::from_failure_reason(LocalHTLCFailure::ChannelClosed);
 			let receiver = HTLCDestination::NextHopChannel { node_id: Some(*counterparty_node_id), channel_id: *channel_id };
 			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, receiver);
 		}
@@ -4067,7 +4069,7 @@ where
 			shutdown_res.closure_reason, shutdown_res.dropped_outbound_htlcs.len());
 		for htlc_source in shutdown_res.dropped_outbound_htlcs.drain(..) {
 			let (source, payment_hash, counterparty_node_id, channel_id) = htlc_source;
-			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
+			let reason = HTLCFailReason::from_failure_reason(LocalHTLCFailure::ChannelClosed);
 			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id };
 			self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
 		}
@@ -4283,18 +4285,18 @@ where
 
 	fn can_forward_htlc_to_outgoing_channel(
 		&self, chan: &mut FundedChannel<SP>, msg: &msgs::UpdateAddHTLC, next_packet: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), HTLCFailureDetails> {
 		if !chan.context.should_announce() && !self.default_configuration.accept_forwards_to_priv_channels {
 			// Note that the behavior here should be identical to the above block - we
 			// should NOT reveal the existence or non-existence of a private channel if
 			// we don't allow forwards outbound over them.
-			return Err(("Refusing to forward to a private channel based on our config.", 0x4000 | 10));
+			return Err(LocalHTLCFailure::PrivateChannelForward.into());
 		}
 		if chan.context.get_channel_type().supports_scid_privacy() && next_packet.outgoing_scid != chan.context.outbound_scid_alias() {
 			// `option_scid_alias` (referred to in LDK as `scid_privacy`) means
 			// "refuse to forward unless the SCID alias was used", so we pretend
 			// we don't have the channel here.
-			return Err(("Refusing to forward over real channel SCID as our counterparty requested.", 0x4000 | 10));
+			return Err(LocalHTLCFailure::RealSCIDForward.into());
 		}
 
 		// Note that we could technically not return an error yet here and just hope
@@ -4304,19 +4306,23 @@ where
 		// on a small/per-node/per-channel scale.
 		if !chan.context.is_live() {
 			if !chan.context.is_enabled() {
-				// channel_disabled
-				return Err(("Forwarding channel has been disconnected for some time.", 0x1000 | 20));
+				return Err(HTLCFailureDetails{
+					failure_code: 0x1000 | 20, // channel_disabled
+					failure_reason: None,
+					msg: "Forwarding channel has been disconnected for some time.",
+				});
 			} else {
-				// temporary_channel_failure
-				return Err(("Forwarding channel is not in a ready state.", 0x1000 | 7));
+				return Err(LocalHTLCFailure::ChannelNotReady.into())
 			}
 		}
-		if next_packet.outgoing_amt_msat < chan.context.get_counterparty_htlc_minimum_msat() { // amount_below_minimum
-			return Err(("HTLC amount was below the htlc_minimum_msat", 0x1000 | 11));
+		if next_packet.outgoing_amt_msat < chan.context.get_counterparty_htlc_minimum_msat() {
+			return Err(HTLCFailureDetails{
+				failure_code: 0x1000 | 11,
+				failure_reason: None,
+				msg: "HTLC amount was below the htlc_minimum_msat",
+			});
 		}
-		if let Err((err, code)) = chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value) {
-			return Err((err, code));
-		}
+		chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value)?;
 
 		Ok(())
 	}
@@ -4345,7 +4351,7 @@ where
 
 	fn can_forward_htlc(
 		&self, msg: &msgs::UpdateAddHTLC, next_packet_details: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), HTLCFailureDetails> {
 		match self.do_funded_channel_callback(next_packet_details.outgoing_scid, |chan: &mut FundedChannel<SP>| {
 			self.can_forward_htlc_to_outgoing_channel(chan, msg, next_packet_details)
 		}) {
@@ -4358,17 +4364,17 @@ where
 					fake_scid::is_valid_intercept(&self.fake_scid_rand_bytes, next_packet_details.outgoing_scid, &self.chain_hash)) ||
 					fake_scid::is_valid_phantom(&self.fake_scid_rand_bytes, next_packet_details.outgoing_scid, &self.chain_hash)
 				{} else {
-					return Err(("Don't have available channel for forwarding as requested.", 0x4000 | 10));
+					return Err(HTLCFailureDetails {
+						failure_code: 0x4000 | 10,
+						failure_reason: None,
+						msg: "Don't have available channel for forwarding as requested.",
+					});
 				}
 			}
 		}
 
 		let cur_height = self.best_block.read().unwrap().height + 1;
-		if let Err((err_msg, err_code)) = check_incoming_htlc_cltv(
-			cur_height, next_packet_details.outgoing_cltv_value, msg.cltv_expiry
-		) {
-			return Err((err_msg, err_code));
-		}
+		check_incoming_htlc_cltv(cur_height, next_packet_details.outgoing_cltv_value, msg.cltv_expiry)?;
 
 		Ok(())
 	}
@@ -5733,10 +5739,10 @@ where
 					)
 				}) {
 					Some(Ok(_)) => {},
-					Some(Err((err, code))) => {
+					Some(Err(htlc_failure)) => {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
-							&update_add_htlc, &incoming_counterparty_node_id, err, code,
-							is_intro_node_blinded_forward, &shared_secret,
+							&update_add_htlc, &incoming_counterparty_node_id, htlc_failure.msg,
+							htlc_failure.failure_code, is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
 						htlc_fails.push((htlc_fail, htlc_destination));
@@ -5748,12 +5754,12 @@ where
 
 				// Now process the HTLC on the outgoing channel if it's a forward.
 				if let Some(next_packet_details) = next_packet_details_opt.as_ref() {
-					if let Err((err, code)) = self.can_forward_htlc(
+					if let Err(htlc_fail) = self.can_forward_htlc(
 						&update_add_htlc, next_packet_details
 					) {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
-							&update_add_htlc, &incoming_counterparty_node_id, err, code,
-							is_intro_node_blinded_forward, &shared_secret,
+							&update_add_htlc, &incoming_counterparty_node_id, htlc_fail.msg,
+							htlc_fail.failure_code, is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
 						htlc_fails.push((htlc_fail, htlc_destination));
@@ -8730,7 +8736,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 		}
 		for htlc_source in dropped_htlcs.drain(..) {
 			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id.clone()), channel_id: msg.channel_id };
-			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
+			let reason = HTLCFailReason::from_failure_reason(LocalHTLCFailure::ShutdownSent);
 			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, receiver);
 		}
 		if let Some(shutdown_res) = finish_shutdown {
@@ -9071,7 +9077,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 										});
 
 										failed_intercept_forwards.push((htlc_source, forward_info.payment_hash,
-												HTLCFailReason::from_failure_code(0x4000 | 10),
+												HTLCFailReason::from_failure_reason(LocalHTLCFailure::DupliateIntercept),
 												HTLCDestination::InvalidForward { requested_forward_scid: scid },
 										));
 									}
@@ -13628,7 +13634,7 @@ where
 			}
 		};
 
-		let mut failed_htlcs = Vec::new();
+		let mut failed_htlcs = Vec::new(); // TODO: need to push various reasons onto this vec to pass on!
 		let channel_count: u64 = Readable::read(reader)?;
 		let mut channel_id_set = hash_set_with_capacity(cmp::min(channel_count as usize, 128));
 		let mut per_peer_state = hash_map_with_capacity(cmp::min(channel_count as usize, MAX_ALLOC_SIZE/mem::size_of::<(PublicKey, Mutex<PeerState<SP>>)>()));
@@ -15059,8 +15065,8 @@ mod tests {
 		let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 
 		create_announced_chan_between_nodes(&nodes, 0, 1);
-	
-		// Since we do not send peer storage, we manually simulate receiving a dummy 
+
+		// Since we do not send peer storage, we manually simulate receiving a dummy
 		// `PeerStorage` from the channel partner.
 		nodes[0].node.handle_peer_storage(nodes[1].node.get_our_node_id(), msgs::PeerStorage{data: vec![0; 100]});
 

@@ -38,6 +38,8 @@ use core::ops::Deref;
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+use super::channelmanager::FailureCode;
+
 pub(crate) struct OnionKeys {
 	#[cfg(test)]
 	pub(crate) shared_secret: SharedSecret,
@@ -1232,65 +1234,78 @@ where
 	}
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub (super) enum LocalHTLCFailure {
+	FailureCode{ failure_code: u16 },
+	FailureReason{ reason: LocalHTLCFailureReason },
+}
+
 /// Describes the reasons for failed HTLC forwards or receives at our node.
-pub(super) enum LocalHTLCFailure {
+#[derive(Clone, Eq, PartialEq)]
+pub(super) enum LocalHTLCFailureReason {
 	DustLimitHolder,
 	DustLimitCounterparty,
 	FeeSpikeBuffer,
 	ShutdownSent,
 	PrivateChannelForward,
 	RealSCIDForward,
-	ChannelDisabled,
 	ChannelNotReady,
-	HTLCAmountBelowMinimum,
-	InsufficientFees,
-	IncorrectCLTVExpiry,
-	UnknownChannel,
-	ExpiryTooSoon,
-	ExpiryTooFar,
+	ChannelClosed,
+	InterceptFailed,
+	DupliateIntercept,
+	HTLCTimeout,
 }
 
-impl LocalHTLCFailure {
+impl LocalHTLCFailureReason {
 	/// The BOLT04 falure code for the local HTLC failure.
 	pub(super) fn failure_code(&self) -> u16 {
 		match self {
-			LocalHTLCFailure::DustLimitHolder
-			| LocalHTLCFailure::DustLimitCounterparty
-			| LocalHTLCFailure::FeeSpikeBuffer
-			| LocalHTLCFailure::ChannelNotReady => 0x1000 | 7,
-			LocalHTLCFailure::ShutdownSent => 0x4000 | 8,
-			LocalHTLCFailure::PrivateChannelForward
-			| LocalHTLCFailure::RealSCIDForward
-			| LocalHTLCFailure::UnknownChannel => 0x4000 | 10,
-			LocalHTLCFailure::ChannelDisabled => 0x1000 | 20,
-			LocalHTLCFailure::HTLCAmountBelowMinimum => 0x1000 | 11,
-			LocalHTLCFailure::InsufficientFees => 0x1000 | 12,
-			LocalHTLCFailure::IncorrectCLTVExpiry => 0x1000 | 13,
-			LocalHTLCFailure::ExpiryTooSoon => 0x1000 | 14,
-			LocalHTLCFailure::ExpiryTooFar => 21,
+			Self::DustLimitHolder
+			| Self::DustLimitCounterparty
+			| Self::FeeSpikeBuffer
+			| Self::ChannelNotReady => 0x1000 | 7,
+			Self::ShutdownSent
+			| Self::ChannelClosed => 0x4000 | 8,
+			Self::PrivateChannelForward
+			| Self::RealSCIDForward
+			| Self::InterceptFailed
+			| Self::DupliateIntercept => 0x4000 | 10,
+			Self::HTLCTimeout => 0x2000 | 2,
 		}
 	}
 
 	/// A human readable message for the failure.
 	pub(super) fn msg(&self) -> &'static str {
 		match self{
-			LocalHTLCFailure::DustLimitHolder => "Exceeded our dust exposure limit on holder commitment",
-			LocalHTLCFailure::DustLimitCounterparty => "Exceeded our dust exposure limit on counterparty commitment",
-			LocalHTLCFailure::FeeSpikeBuffer => "Fee spike buffer violation",
-			LocalHTLCFailure::ChannelNotReady => "Forwarding channel is not in a ready state",
-			LocalHTLCFailure::ShutdownSent => "Shutdown was already sent",
-			LocalHTLCFailure::PrivateChannelForward =>  "Refusing to forward to a privated channel based on our config",
-			LocalHTLCFailure::RealSCIDForward =>  "Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
-			LocalHTLCFailure::ChannelDisabled =>  "Forwarding channel has been disconnected for some time",
-			LocalHTLCFailure::HTLCAmountBelowMinimum =>  "HTLC amount was below the htlc_minimum_msat",
-			LocalHTLCFailure::InsufficientFees =>  "Prior hop has deviated from specified fees parameters or origin node has obsolete ones",
-			LocalHTLCFailure::IncorrectCLTVExpiry =>  "Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
-			LocalHTLCFailure::UnknownChannel =>  "Don't have available channel for forwarding as requested",
-			LocalHTLCFailure::ExpiryTooSoon =>  "CLTV expiry is too close",
-			LocalHTLCFailure::ExpiryTooFar =>  "CLTV expiry is too far in the future",
+			Self::DustLimitHolder => "Exceeded our dust exposure limit on holder commitment",
+			Self::DustLimitCounterparty => "Exceeded our dust exposure limit on counterparty commitment",
+			Self::FeeSpikeBuffer => "Fee spike buffer violation",
+			Self::ChannelNotReady => "Forwarding channel is not in a ready state",
+			Self::ShutdownSent => "Shutdown was already sent",
+			Self::PrivateChannelForward =>  "Refusing to forward to a privated channel based on our config",
+			Self::RealSCIDForward =>  "Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
+			Self::ChannelClosed => "Channel closure initiated",
+			Self::InterceptFailed => "Intercepted htlc failed",
+			Self::DupliateIntercept => "Duplicate intercepted payment",
+			Self::HTLCTimeout => "HTLC timeout reached",
+			Self::RouteBlindingError => "Route blinding error",
 		}
 	}
 }
+
+impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
+	(0, DustLimitHolder) => {},
+	(1, DustLimitCounterparty) => {},
+	(2, FeeSpikeBuffer) => {},
+	(3, ShutdownSent) => {},
+	(4, PrivateChannelForward) => {},
+	(5, RealSCIDForward) => {},
+	(6, ChannelNotReady) => {},
+	(7, ChannelClosed) => {},
+	(8, InterceptFailed) => {},
+	(9, DupliateIntercept) => {},
+	(10, HTLCTimeout) => {},
+);
 
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
@@ -1300,7 +1315,7 @@ pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
 #[cfg_attr(test, derive(PartialEq))]
 enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
-	Reason { failure_code: u16, data: Vec<u8> },
+	Reason { failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailureReason>},
 }
 
 impl core::fmt::Debug for HTLCFailReason {
@@ -1333,13 +1348,14 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 	},
 	(1, Reason) => {
 		(0, failure_code, required),
+		(1, failure_reason, option),
 		(2, data, required_vec),
 	},
 );
 
 impl HTLCFailReason {
 	#[rustfmt::skip]
-	pub(super) fn reason(failure_code: u16, data: Vec<u8>) -> Self {
+	fn reason(failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailureReason>) -> Self {
 		const BADONION: u16 = 0x8000;
 		const PERM: u16 = 0x4000;
 		const NODE: u16 = 0x2000;
@@ -1378,11 +1394,16 @@ impl HTLCFailReason {
 		}
 		else { debug_assert!(false, "Unknown failure code: {}", failure_code) }
 
-		Self(HTLCFailReasonRepr::Reason { failure_code, data })
+		Self(HTLCFailReasonRepr::Reason { failure_code, data, failure_reason })
 	}
 
-	pub(super) fn from_failure_code(failure_code: u16) -> Self {
-		Self::reason(failure_code, Vec::new())
+	/// Creates a ['HTLCFailReason'] from a ['LocalHTLCFailure'], optionall adding any additional
+	/// information by the local error that would be informative to the end user.
+	pub (super) fn from_failure_reason(reason: LocalHTLCFailure) -> Self{
+		match reason{
+			LocalHTLCFailure::FailureCode { failure_code } => Self::reason(failure_code, Vec::new(), None),
+			LocalHTLCFailure::FailureReason { reason } => Self::reason(reason.failure_code(), Vec::new(), Some(reason))
+		}
 	}
 
 	pub(super) fn from_msg(msg: &msgs::UpdateFailHTLC) -> Self {
@@ -1393,7 +1414,7 @@ impl HTLCFailReason {
 		&self, incoming_packet_shared_secret: &[u8; 32], phantom_shared_secret: &Option<[u8; 32]>,
 	) -> msgs::OnionErrorPacket {
 		match self.0 {
-			HTLCFailReasonRepr::Reason { ref failure_code, ref data } => {
+			HTLCFailReasonRepr::Reason { ref failure_code, ref data, .. } => {
 				if let Some(phantom_ss) = phantom_shared_secret {
 					let phantom_packet =
 						build_failure_packet(phantom_ss, *failure_code, &data[..]).encode();

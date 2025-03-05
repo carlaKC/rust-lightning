@@ -524,6 +524,86 @@ impl_writeable_tlv_based_enum_upgradable!(HTLCDestination,
 	},
 );
 
+/// The reason for a HTLC failure as indicated in [`Event::HTLCHandlingFailed`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HTLCFailure {
+	/// The HTLC was failed back by a downstream node with an encrypted failure reason.
+	DownstreamFailure,
+	/// The HTLC was failed back locally, so additional information is available.
+	LocalFailureReason{reason: HTLCFailureReason},
+}
+
+impl_writeable_tlv_based_enum!(HTLCFailure,
+	(0, DownstreamFailure) => {},
+	(1, LocalFailureReason) => {
+		(0, reason, option),
+	},
+);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HTLCFailureReason {
+	///
+	DustLimitHolder,
+	DustLimitCounterparty,
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	ChannelClosed,
+	///
+	InterceptFailed,
+	/// The HTLC was failed because it had a duplicate intercept ID.
+	DupliateIntercept,
+	/// The HTLC was failed because its on-chain expiry height had been reached.
+	HTLCExpiryTimeout,
+	/// The HTLC amount was smaller than the channel's [link to minimum hltc size]. This may be
+	/// because the sending node has an out of date forwarding policy.
+	AmountBelowMinimum,
+	/// The HTLC did not pay a fee that satisfies the channel's forwarding policy. This may be
+	/// because the sending node has an out of date forwarding policy.
+	InsufficientFee,
+	/// The HTLC's CLTV expiry did not meet the requirements of the channel's forwarding policy.
+	/// It was either too low to satisfy the [link to CLTV delta] or too high to forward.
+	IncorrectCLTVExpiry,
+	/// A payment was sent to our node which did not satisfy the conditions of our invoice, for
+	/// example setting an incorrect amount or final CLTV value, or was an un-claimable keysend
+	/// with an invalid preimage.
+	IncorrectPaymentDetails,
+	/// The HTLC was failed because the channel has been disabled. The sending node may have an
+	/// out of date forwarding policy for the channel.
+	ChannelDisabled,
+	/// The payment's total amount was sent using multiple HTLCs, and the total amount did not
+	/// arrive within [link to htlc timeout] so the partial HTLC(s) was failed back.
+	MPPTimeout,
+	/// The HTLC failed for a reason not listed above, see [link to bolt 04] for details on various
+	/// failure reasons.
+	FailureCode{ code: u16 },
+}
+
+impl_writeable_tlv_based_enum_upgradable!(HTLCFailureReason,
+	(0, DustLimitHolder) => {},
+	(1, DustLimitCounterparty) => {},
+	(2, FeeSpikeBuffer) => {},
+	(3, ShutdownSent) => {},
+	(4, PrivateChannelForward) => {},
+	(5, RealSCIDForward) => {},
+	(6, ChannelNotReady) => {},
+	(7, ChannelClosed) => {},
+	(8, InterceptFailed) => {},
+	(9, DupliateIntercept) => {},
+	(10, HTLCExpiryTimeout) => {},
+	(11, AmountBelowMinimum) => {},
+	(12, InsufficientFee) => {},
+	(13, IncorrectCLTVExpiry) => {},
+	(14, IncorrectPaymentDetails) => {},
+	(15, ChannelDisabled) => {},
+	(16, MPPTimeout) => {},
+	(17, FailureCode) => {
+		(0, code, required),
+	},
+);
+
 /// Will be used in [`Event::HTLCIntercepted`] to identify the next hop in the HTLC's path.
 /// Currently only used in serialization for the sake of maintaining compatibility. More variants
 /// will be added for general-purpose HTLC forward intercepts as well as trampoline forward
@@ -1449,6 +1529,10 @@ pub enum Event {
 		prev_channel_id: ChannelId,
 		/// Destination of the HTLC that failed to be processed.
 		failed_next_destination: HTLCDestination,
+		/// The reason that the HTLC failed to be processed.
+		///
+		/// This field will be `None` only for objects serialized prior to LDK 0.1.1.
+		reason: Option<HTLCFailure>,
 	},
 	/// Indicates that a transaction originating from LDK needs to have its fee bumped. This event
 	/// requires confirmed external funds to be readily available to spend.
@@ -1752,10 +1836,11 @@ impl Writeable for Event {
 					(8, path.blinded_tail, option),
 				})
 			},
-			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failed_next_destination } => {
+			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failed_next_destination, ref reason} => {
 				25u8.write(writer)?;
 				write_tlv_fields!(writer, {
 					(0, prev_channel_id, required),
+					(1, reason, option),
 					(2, failed_next_destination, required),
 				})
 			},
@@ -2202,13 +2287,16 @@ impl MaybeReadable for Event {
 				let mut f = || {
 					let mut prev_channel_id = ChannelId::new_zero();
 					let mut failed_next_destination_opt = UpgradableRequired(None);
+					let mut reason = None;
 					read_tlv_fields!(reader, {
 						(0, prev_channel_id, required),
+						(1, reason, option),
 						(2, failed_next_destination_opt, upgradable_required),
 					});
 					Ok(Some(Event::HTLCHandlingFailed {
 						prev_channel_id,
 						failed_next_destination: _init_tlv_based_struct_field!(failed_next_destination_opt, upgradable_required),
+						reason,
 					}))
 				};
 				f()

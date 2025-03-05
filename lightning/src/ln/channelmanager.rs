@@ -5729,7 +5729,8 @@ where
 				) {
 					Ok(decoded_onion) => decoded_onion,
 					Err(htlc_fail) => {
-						htlc_fails.push((htlc_fail, HTLCDestination::InvalidOnion));
+						// TODO: don't have a reason here!
+						htlc_fails.push((htlc_fail, (0x2000 | 2).into(), HTLCDestination::InvalidOnion));
 						continue;
 					},
 				};
@@ -5752,7 +5753,7 @@ where
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						htlc_fails.push((htlc_fail, reason, htlc_destination));
 						continue;
 					},
 					// The incoming channel no longer exists, HTLCs should be resolved onchain instead.
@@ -5769,7 +5770,7 @@ where
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						htlc_fails.push((htlc_fail, reason, htlc_destination));
 						continue;
 					}
 				}
@@ -5783,7 +5784,8 @@ where
 					},
 					PendingHTLCStatus::Fail(htlc_fail) => {
 						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						// TODO: don't have a reason here! Made this one up to compile
+						htlc_fails.push((htlc_fail, (0x2000 | 2).into(), htlc_destination));
 					},
 				}
 			}
@@ -5795,7 +5797,7 @@ where
 				incoming_channel_id, incoming_user_channel_id, htlc_forwards.drain(..).collect()
 			);
 			self.forward_htlcs_without_forward_event(&mut [pending_forwards]);
-			for (htlc_fail, htlc_destination) in htlc_fails.drain(..) {
+			for (htlc_fail, reason, htlc_destination) in htlc_fails.drain(..) {
 				let failure = match htlc_fail {
 					HTLCFailureMsg::Relay(fail_htlc) => HTLCForwardInfo::FailHTLC {
 						htlc_id: fail_htlc.htlc_id,
@@ -5811,6 +5813,7 @@ where
 				self.pending_events.lock().unwrap().push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: incoming_channel_id,
 					failed_next_destination: htlc_destination,
+					reason: Some(reason.into()),
 				}, None));
 			}
 		}
@@ -7007,6 +7010,7 @@ where
 				pending_events.push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: *channel_id,
 					failed_next_destination: destination,
+					reason: Some(onion_error.failure_reason()),
 				}, None));
 			},
 		}

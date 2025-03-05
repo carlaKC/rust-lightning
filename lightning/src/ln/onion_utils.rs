@@ -10,6 +10,7 @@
 use crate::blinded_path::BlindedHop;
 use crate::crypto::chacha20::ChaCha20;
 use crate::crypto::streams::ChaChaReader;
+use crate::events::{HTLCFailure, HTLCFailureReason};
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs;
@@ -37,6 +38,11 @@ use core::ops::Deref;
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+
+const BADONION: u16 = 0x8000;
+const PERM: u16 = 0x4000;
+const NODE: u16 = 0x2000;
+const UPDATE: u16 = 0x1000;
 
 pub(crate) struct OnionKeys {
 	#[cfg(test)]
@@ -1274,7 +1280,7 @@ impl LocalHTLCFailure {
 }
 
 #[derive(Clone, Eq, PartialEq)]
-pub(super) enum LocalHTLCFailureReason {
+pub enum LocalHTLCFailureReason {
 	DustLimitHolder,
 	DustLimitCounterparty,
 	FeeSpikeBuffer,
@@ -1380,11 +1386,6 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 impl HTLCFailReason {
 	#[rustfmt::skip]
 	fn reason(failure_code: u16, data: Vec<u8>, failure_reason: Option<LocalHTLCFailureReason>) -> Self {
-		const BADONION: u16 = 0x8000;
-		const PERM: u16 = 0x4000;
-		const NODE: u16 = 0x2000;
-		const UPDATE: u16 = 0x1000;
-
 		     if failure_code == 1  | PERM { debug_assert!(data.is_empty()) }
 		else if failure_code == 2  | NODE { debug_assert!(data.is_empty()) }
 		else if failure_code == 2  | PERM | NODE { debug_assert!(data.is_empty()) }
@@ -1503,6 +1504,71 @@ impl HTLCFailReason {
 					unreachable!();
 				}
 			},
+		}
+	}
+
+	pub(super) fn failure_reason(&self) -> HTLCFailure {
+		match self.0 {
+			HTLCFailReasonRepr::Reason { failure_code, data, failure_reason } => {
+				if let Some(reason) = failure_reason {
+					match reason {
+						LocalHTLCFailureReason::DustLimitHolder => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::DustLimitHolder }
+						},
+						LocalHTLCFailureReason::DustLimitCounterparty => {
+							HTLCFailure::LocalFailureReason{ reason:
+								HTLCFailureReason::DustLimitCounterparty,
+							}
+						},
+						LocalHTLCFailureReason::FeeSpikeBuffer => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::FeeSpikeBuffer }
+						},
+						LocalHTLCFailureReason::ShutdownSent => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::ShutdownSent }
+						},
+						LocalHTLCFailureReason::PrivateChannelForward => {
+							HTLCFailure::LocalFailureReason{
+								reason: HTLCFailureReason::PrivateChannelForward,
+							}
+						},
+						LocalHTLCFailureReason::RealSCIDForward => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::RealSCIDForward }
+						},
+						LocalHTLCFailureReason::ChannelNotReady => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::ChannelNotReady }
+						},
+						LocalHTLCFailureReason::ChannelClosed => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::ChannelClosed }
+						},
+						LocalHTLCFailureReason::InterceptFailed => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::InterceptFailed }
+						},
+						LocalHTLCFailureReason::DupliateIntercept => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::DupliateIntercept }
+						},
+						LocalHTLCFailureReason::HTLCExpiryTimeout => {
+							HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::HTLCExpiryTimeout }
+						},
+					}
+				} else {
+					if failure_code == UPDATE | 11 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::AmountBelowMinimum }
+					} else if failure_code == UPDATE | 12 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::InsufficientFee }
+					} else if failure_code == UPDATE | 14 || failure_code == UPDATE | 13 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::IncorrectCLTVExpiry }
+					} else if failure_code == PERM | 15 || failure_code == 18 || failure_code == 19 || failure_code	== 21 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::IncorrectPaymentDetails }
+					} else if failure_code == UPDATE | 20 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::ChannelDisabled }
+					} else if failure_code == 23 {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::MPPTimeout }
+					} else {
+						HTLCFailure::LocalFailureReason{ reason: HTLCFailureReason::FailureCode{ code: failure_code } }
+					}
+				}
+			},
+			HTLCFailReasonRepr::LightningError { .. } => HTLCFailure::DownstreamFailure,
 		}
 	}
 }

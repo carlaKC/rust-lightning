@@ -10,6 +10,7 @@
 use crate::blinded_path::BlindedHop;
 use crate::crypto::chacha20::ChaCha20;
 use crate::crypto::streams::ChaChaReader;
+use crate::events::LocalFailureReason;
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs;
@@ -1255,6 +1256,37 @@ where
 			#[cfg(any(test, feature = "_test_utils"))]
 			onion_error_data: None,
 		}
+	}
+}
+
+/// A BOLT04 and user-facing error pair to describe the reason for a HTLC failure. These two values
+/// are tracked together because erasure can happen in both directions - some bolt 04 error codes
+/// are intentionally vague to protect privacy (erasing useful user errors), and some user-facing
+/// errors do not require the detail of a bolt 04 error (erasing the detailed bolt 04 error).
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(super) struct HTLCFailureDetails {
+	/// The BOLT04 failure code for the htlc failure.
+	pub(super) failure_code: u16,
+	/// A user-facing failure reason for the htlc failure. This failure reason may be less, more
+	/// or equally as descriptive as the [`Self::failure_code`] provided, as it's intended for
+	/// use on a public-facing API.
+	reason: LocalFailureReason,
+}
+
+impl HTLCFailureDetails {
+	pub fn new(failure_code: u16, reason: LocalFailureReason) -> Self {
+		// TODO: add code / resason assertions to amke sure we're using the right combos
+		// eg: unknown channel error code - assert that there's no reason (if Some) because it's
+		//     a duplicate so we don't also need to give a reason
+		// eg: private channel reason - assert that it's erased into a temporary error
+
+		HTLCFailureDetails { failure_code, reason }
+	}
+}
+
+impl Into<LocalFailureReason> for HTLCFailureDetails {
+	fn into(self) -> LocalFailureReason {
+		self.reason
 	}
 }
 

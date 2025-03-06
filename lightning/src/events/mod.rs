@@ -477,6 +477,8 @@ pub enum HTLCDestination {
 		node_id: Option<PublicKey>,
 		/// The outgoing `channel_id` between us and the next node.
 		channel_id: ChannelId,
+		/// The reason that the forward failed.
+		reason: Option<LocalFailureReason>,
 	},
 	/// Scenario where we are unsure of the next node to forward the HTLC to.
 	UnknownNextHop {
@@ -503,13 +505,16 @@ pub enum HTLCDestination {
 	///   recipient for a payment.
 	FailedPayment {
 		/// The payment hash of the payment we attempted to process.
-		payment_hash: PaymentHash
+		payment_hash: PaymentHash,
+		/// The reason that the payment failed.
+		reason: Option<LocalFailureReason>,
 	},
 }
 
 impl_writeable_tlv_based_enum_upgradable!(HTLCDestination,
 	(0, NextHopChannel) => {
 		(0, node_id, required),
+		(1, reason, option),
 		(2, channel_id, required),
 	},
 	(1, InvalidForward) => {
@@ -521,7 +526,61 @@ impl_writeable_tlv_based_enum_upgradable!(HTLCDestination,
 	(3, InvalidOnion) => {},
 	(4, FailedPayment) => {
 		(0, payment_hash, required),
+		(1, reason, option),
 	},
+);
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum LocalFailureReason { // TODO: this isn't just local HTLCs anymore, need to relax meaning
+	// restraints / policy realted
+	DustLimiReached,
+	FeeSpikeBuffer,
+	AmountBelowMinimum,
+	InsufficientFee,
+	IncorrectCLTV,
+	ExpiresTooSoon,
+	IncorrectPaymentDetails, // perhaps we want this to be more detailed?
+	UnknownEvenTLV,
+	// Forwarding related
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	ChannelDisabled,
+	UnknownChannel, // TODO: this is a duplicate of unknown next hop. This is ok, have all user-friendly things surfaced here
+	MPPTimeout,
+	ManualFailure,
+	InvalidOnion,
+	InvalidKeysend,
+	// Shutdown realted
+	ShutdownSent,
+	ChannelClosed,
+	// Remote node failed it, this isn't a local error!
+	CounterpartyFailure,
+	PhantomFailure,
+}
+
+impl_writeable_tlv_based_enum!(LocalFailureReason,
+	(0, DustLimiReached) => {},
+	(1, FeeSpikeBuffer) => {},
+	(2, PrivateChannelForward) => {},
+	(3, RealSCIDForward) => {},
+	(4, ChannelNotReady) => {},
+	(5, ShutdownSent) => {},
+	(6, ChannelClosed) => {},
+	(7, ChannelDisabled) => {},
+	(8, AmountBelowMinimum) => {},
+	(9, InsufficientFee) => {},
+	(10, IncorrectCLTV) => {},
+	(11, ExpiresTooSoon) => {},
+	(12, UnknownChannel) => {},
+	(13, MPPTimeout) => {},
+	(14, ManualFailure) => {},
+	(15, IncorrectPaymentDetails) => {},
+	(16, CounterpartyFailure) => {},
+	(17, InvalidOnion) => {},
+	(18, InvalidKeysend) => {},
+	(19, PhantomFailure) => {},
+	(20, UnknownEvenTLV) => {},
 );
 
 /// Will be used in [`Event::HTLCIntercepted`] to identify the next hop in the HTLC's path.

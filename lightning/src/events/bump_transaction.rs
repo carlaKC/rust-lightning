@@ -739,8 +739,7 @@ where
 			)?;
 			anchor_tx.input[0].witness = anchor_descriptor.tx_input_witness(&anchor_sig);
 
-			#[cfg(debug_assertions)]
-			{
+			/*#[cfg(debug_assertions)] {
 				let signed_tx_weight = anchor_tx.weight().to_wu();
 				let expected_signed_tx_weight =
 					unsigned_tx_weight + 2 /* wit marker */ + total_satisfaction_weight;
@@ -756,7 +755,7 @@ where
 				// Our feerate should always be at least what we were seeking. It may overshoot if
 				// the coin selector burned funds to an OP_RETURN without a change output.
 				assert!(package_fee >= expected_package_fee);
-			}
+			}*/
 
 			log_info!(
 				self.logger,

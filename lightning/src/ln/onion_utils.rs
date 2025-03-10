@@ -1279,6 +1279,13 @@ impl HTLCFailureDetails {
 			Self::FailureReason(reason) => reason.failure_code(),
 		}
 	}
+
+	pub(super) fn failure_reason(&self) -> LocalHTLCFailureReason {
+		match self {
+			Self::FailureCode(_) => LocalHTLCFailureReason::ChannelClosed, // TODO: fix
+			Self::FailureReason(r) => *r,
+		}
+	}
 }
 
 /// The reason that a HTLC was failed back by our node.
@@ -1311,6 +1318,7 @@ pub enum LocalHTLCFailureReason {
 	FailBackBuffer,
 	InterceptTimeout,
 	DuplicateIntercept,
+	ExpiryTooSoon,
 }
 
 impl Into<HTLCFailureDetails> for LocalHTLCFailureReason {
@@ -1345,6 +1353,7 @@ impl LocalHTLCFailureReason {
 			Self::MPPTimeout => 23,
 			Self::FailBackBuffer => 0x4000 | 15,
 			Self::InterceptTimeout => 0x2000 | 2,
+			Self::ExpiryTooSoon => 0x1000 | 14,
 		}
 	}
 }
@@ -1370,6 +1379,7 @@ impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
 	(15, FailBackBuffer) => {},
 	(16, InterceptTimeout) => {},
 	(17, DuplicateIntercept) => {},
+	(18, ExpiryTooSoon) => {},
 );
 
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug

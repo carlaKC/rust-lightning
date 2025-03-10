@@ -1307,6 +1307,10 @@ pub enum LocalHTLCFailureReason {
 	InvalidKeysendPreimage,
 	PaymentSecretRequired,
 	IncorrectHTLCAmount,
+	MPPTimeout,
+	FailBackBuffer,
+	InterceptTimeout,
+	DuplicateIntercept,
 }
 
 impl Into<HTLCFailureDetails> for LocalHTLCFailureReason {
@@ -1322,13 +1326,15 @@ impl Into<HTLCFailureDetails> for u16 {
 }
 
 impl LocalHTLCFailureReason {
-	fn failure_code(&self) -> u16 {
+	pub(super) fn failure_code(&self) -> u16 {
 		match self {
 			Self::DustLimitReached { .. } | Self::FeeSpikeBuffer | Self::ChannelNotReady => {
 				0x1000 | 7
 			},
 			Self::ShutdownSent | Self::ChannelClosed => 0x4000 | 8,
-			Self::PrivateChannelForward | Self::RealSCIDForward => 0x4000 | 10,
+			Self::PrivateChannelForward | Self::RealSCIDForward | Self::DuplicateIntercept => {
+				0x4000 | 10
+			},
 			Self::FeeInsufficient => 0x1000 | 12,
 			Self::IncorrectCLTVDetla => 0x1000 | 13,
 			Self::ChannelDisabled => 0x1000 | 20,
@@ -1336,6 +1342,9 @@ impl LocalHTLCFailureReason {
 			Self::InvalidKeysendPreimage => 0x4000 | 22,
 			Self::PaymentSecretRequired => 0x4000 | 0x2000 | 3,
 			Self::IncorrectHTLCAmount => 19,
+			Self::MPPTimeout => 23,
+			Self::FailBackBuffer => 0x4000 | 15,
+			Self::InterceptTimeout => 0x2000 | 2,
 		}
 	}
 }
@@ -1357,6 +1366,10 @@ impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
 	(11, InvalidKeysendPreimage) => {},
 	(12, PaymentSecretRequired) => {},
 	(13, IncorrectHTLCAmount) => {},
+	(14, MPPTimeout) => {},
+	(15, FailBackBuffer) => {},
+	(16, InterceptTimeout) => {},
+	(17, DuplicateIntercept) => {},
 );
 
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
@@ -1367,7 +1380,7 @@ pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
 #[cfg_attr(test, derive(PartialEq))]
 enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
-	Reason { failure_code: u16, data: Vec<u8> },
+	Reason { failure_code: u16, data: Vec<u8>, details: Option<LocalHTLCFailureReason> },
 }
 
 impl core::fmt::Debug for HTLCFailReason {
@@ -1400,18 +1413,20 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 	},
 	(1, Reason) => {
 		(0, failure_code, required),
+		(1, details, option),
 		(2, data, required_vec),
 	},
 );
 
 impl HTLCFailReason {
 	#[rustfmt::skip]
-	pub(super) fn reason(failure_code: u16, data: Vec<u8>) -> Self {
+	pub(super) fn reason(details: HTLCFailureDetails, data: Vec<u8>) -> Self {
 		const BADONION: u16 = 0x8000;
 		const PERM: u16 = 0x4000;
 		const NODE: u16 = 0x2000;
 		const UPDATE: u16 = 0x1000;
 
+		let failure_code = details.failure_code();
 		     if failure_code == 1  | PERM { debug_assert!(data.is_empty()) }
 		else if failure_code == 2  | NODE { debug_assert!(data.is_empty()) }
 		else if failure_code == 2  | PERM | NODE { debug_assert!(data.is_empty()) }
@@ -1445,11 +1460,14 @@ impl HTLCFailReason {
 		}
 		else { debug_assert!(false, "Unknown failure code: {}", failure_code) }
 
-		Self(HTLCFailReasonRepr::Reason { failure_code, data })
+		Self(HTLCFailReasonRepr::Reason { failure_code, data, details: match details {
+			HTLCFailureDetails::FailureCode(_) => None,
+			HTLCFailureDetails::FailureReason(r) => Some(r),
+		}})
 	}
 
-	pub(super) fn from_failure_code(failure_code: u16) -> Self {
-		Self::reason(failure_code, Vec::new())
+	pub(super) fn from_failure_details(details: HTLCFailureDetails) -> Self {
+		Self::reason(details, Vec::new())
 	}
 
 	pub(super) fn from_msg(msg: &msgs::UpdateFailHTLC) -> Self {
@@ -1460,7 +1478,7 @@ impl HTLCFailReason {
 		&self, incoming_packet_shared_secret: &[u8; 32], phantom_shared_secret: &Option<[u8; 32]>,
 	) -> msgs::OnionErrorPacket {
 		match self.0 {
-			HTLCFailReasonRepr::Reason { ref failure_code, ref data } => {
+			HTLCFailReasonRepr::Reason { ref failure_code, ref data, .. } => {
 				if let Some(phantom_ss) = phantom_shared_secret {
 					let phantom_packet =
 						build_failure_packet(phantom_ss, *failure_code, &data[..]).encode();

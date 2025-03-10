@@ -1258,6 +1258,107 @@ where
 	}
 }
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum HTLCFailureDetails {
+	/// BOLT04 failure codes that will be used internally, but not be surfaced as user-facing
+	/// failure reasons in `[events::HTLCDestination]`.
+	FailureCode(u16),
+	/// Used when the BOLT04 error code erases interesting information that can be surfaced in
+	/// [`events::HTLCHandlingFailed`], or directly maps to information to be surfaced.
+	///
+	/// For example:
+	/// [`FailureDetails::PrivateChannelForward`] is erased by a BOLT04 error code.
+	/// [`FailureDetails::InsufficientFee`] is a BOLT04 error code that is directly surfaced.
+	FailureReason(LocalHTLCFailureReason),
+}
+
+impl HTLCFailureDetails {
+	pub(super) fn failure_code(&self) -> u16 {
+		match self {
+			Self::FailureCode(code) => *code,
+			Self::FailureReason(reason) => reason.failure_code(),
+		}
+	}
+}
+
+/// The reason that a HTLC was failed back by our node.
+//
+// Note that this enum represents various different types of errors:
+// - BOLT04 errors: one-to-one mappings of BOLT04 errors codes to a user facing value.
+// - Erased BOLT04 errors: many-to-one mappings of BOLT04 errors codes to a user facing value.
+// - Errors erased by BOLT04: one-to-many mappings of BOLT04 error codes that hide interesting
+//   errors from the sending node which may be interesting to an end user.
+//
+// They are combined in a single enum so that they can be surfaced in [`events::HTLCHandlingFailed`]
+// as one entity.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum LocalHTLCFailureReason {
+	DustLimitReached { holder_commitment: bool },
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	ChannelClosed,
+	FeeInsufficient,
+	IncorrectCLTVDetla,
+	ChannelDisabled,
+	HTLCBelowMinimum,
+	InvalidKeysendPreimage,
+	PaymentSecretRequired,
+	IncorrectHTLCAmount,
+}
+
+impl Into<HTLCFailureDetails> for LocalHTLCFailureReason {
+	fn into(self) -> HTLCFailureDetails {
+		HTLCFailureDetails::FailureReason(self)
+	}
+}
+
+impl Into<HTLCFailureDetails> for u16 {
+	fn into(self) -> HTLCFailureDetails {
+		HTLCFailureDetails::FailureCode(self)
+	}
+}
+
+impl LocalHTLCFailureReason {
+	fn failure_code(&self) -> u16 {
+		match self {
+			Self::DustLimitReached { .. } | Self::FeeSpikeBuffer | Self::ChannelNotReady => {
+				0x1000 | 7
+			},
+			Self::ShutdownSent | Self::ChannelClosed => 0x4000 | 8,
+			Self::PrivateChannelForward | Self::RealSCIDForward => 0x4000 | 10,
+			Self::FeeInsufficient => 0x1000 | 12,
+			Self::IncorrectCLTVDetla => 0x1000 | 13,
+			Self::ChannelDisabled => 0x1000 | 20,
+			Self::HTLCBelowMinimum => 0x1000 | 11,
+			Self::InvalidKeysendPreimage => 0x4000 | 22,
+			Self::PaymentSecretRequired => 0x4000 | 0x2000 | 3,
+			Self::IncorrectHTLCAmount => 19,
+		}
+	}
+}
+
+impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
+	(0,DustLimitReached) => {
+		(0, holder_commitment, required),
+	},
+	(1, FeeSpikeBuffer) => {},
+	(2, ShutdownSent) => {},
+	(3, PrivateChannelForward) => {},
+	(4, RealSCIDForward) => {},
+	(5, ChannelNotReady) => {},
+	(6, ChannelClosed) => {},
+	(7, FeeInsufficient) => {},
+	(8, IncorrectCLTVDetla) => {},
+	(9, ChannelDisabled) => {},
+	(10, HTLCBelowMinimum) => {},
+	(11, InvalidKeysendPreimage) => {},
+	(12, PaymentSecretRequired) => {},
+	(13, IncorrectHTLCAmount) => {},
+);
+
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
 pub(super) struct HTLCFailReason(HTLCFailReasonRepr);

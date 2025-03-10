@@ -1280,6 +1280,15 @@ impl HTLCFailureDetails {
 	}
 }
 
+impl_writeable_tlv_based_enum!(HTLCFailureDetails,
+	(0, FailureCode) => {
+		(0, code, required),
+	},
+	(1, FailureReason) => {
+		(0, reason, required),
+	},
+);
+
 /// The reason that a HTLC was failed by the local node. These errors either represent direct,
 /// human-readable mappings of BOLT04 error codes or provide additional information that would
 /// otherwise be erased by the BOLT04 error code.
@@ -1309,6 +1318,10 @@ pub enum LocalHTLCFailureReason {
 	CLTVExpiryTooClose,
 	CLTVExpiryTooFar,
 	NodeIDForward,
+	ChannelClosed,
+	FailBackBuffer,
+	ExpiryTooSoon,
+	UnknownNextPeer,
 }
 
 impl Into<HTLCFailureDetails> for LocalHTLCFailureReason {
@@ -1324,15 +1337,16 @@ impl Into<HTLCFailureDetails> for u16 {
 }
 
 impl LocalHTLCFailureReason {
-	fn failure_code(&self) -> u16 {
+	pub(super) fn failure_code(&self) -> u16 {
 		match self {
 			Self::DustLimitReached { .. } | Self::FeeSpikeBuffer | Self::ChannelNotReady => {
 				0x1000 | 7
 			},
-			Self::ShutdownSent => 0x4000 | 8,
-			Self::PrivateChannelForward | Self::RealSCIDForward | Self::NodeIDForward => {
-				0x4000 | 10
-			},
+			Self::ShutdownSent | Self::ChannelClosed => 0x4000 | 8,
+			Self::PrivateChannelForward
+			| Self::RealSCIDForward
+			| Self::NodeIDForward
+			| Self::UnknownNextPeer => 0x4000 | 10,
 			Self::FeeInsufficient => 0x1000 | 12,
 			Self::IncorrectCLTVDetla => 0x1000 | 13,
 			Self::CLTVExpiryTooClose => 0x1000 | 14,
@@ -1340,6 +1354,8 @@ impl LocalHTLCFailureReason {
 			Self::HTLCBelowMinimum => 0x1000 | 11,
 			Self::InvalidKeysendPreimage => 0x4000 | 22,
 			Self::PaymentSecretRequired => 0x4000 | 0x2000 | 3,
+			Self::FailBackBuffer => 0x4000 | 15,
+			Self::ExpiryTooSoon => 0x1000 | 14,
 			Self::IncorrectHTLCAmount => 19,
 			Self::CLTVExpiryTooFar => 21,
 		}
@@ -1365,6 +1381,11 @@ impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
 	(13, CLTVExpiryTooClose) => {},
 	(14, CLTVExpiryTooFar) => {},
 	(15, NodeIDForward) => {},
+	(16, IncorrectHTLCAmount) => {},
+	(17, ChannelClosed) => {},
+	(18, FailBackBuffer) => {},
+	(19, ExpiryTooSoon) => {},
+	(20, UnknownNextPeer) => {},
 );
 
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug

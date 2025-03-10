@@ -428,7 +428,7 @@ fn do_forward_checks_failure(check: ForwardCheckFail, intro_fails: bool) {
 			ForwardCheckFail::InboundOnionCheck => HTLCDestination::InvalidOnion,
 			ForwardCheckFail::ForwardPayloadEncodedAsReceive => HTLCDestination::InvalidOnion,
 			ForwardCheckFail::OutboundChannelCheck =>
-				HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2 },
+				HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2, reason: None },
 		};
 		expect_htlc_handling_failed_destinations!(
 			nodes[1].node.get_and_clear_pending_events(), &[failed_destination.clone()]
@@ -459,7 +459,7 @@ fn do_forward_checks_failure(check: ForwardCheckFail, intro_fails: bool) {
 	let failed_destination = match check {
 		ForwardCheckFail::InboundOnionCheck|ForwardCheckFail::ForwardPayloadEncodedAsReceive => HTLCDestination::InvalidOnion,
 		ForwardCheckFail::OutboundChannelCheck =>
-			HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_2_3.2 },
+			HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_2_3.2, reason: None },
 	};
 	expect_htlc_handling_failed_destinations!(
 		nodes[2].node.get_and_clear_pending_events(), &[failed_destination.clone()]
@@ -606,7 +606,7 @@ fn do_forward_fail_in_process_pending_htlc_fwds(check: ProcessPendingHTLCsCheck,
 					$curr_node.node.peer_disconnected($next_node.node.get_our_node_id());
 					expect_pending_htlcs_forwardable!($curr_node);
 					expect_htlc_handling_failed_destinations!($curr_node.node.get_and_clear_pending_events(),
-						vec![HTLCDestination::NextHopChannel { node_id: Some($next_node.node.get_our_node_id()), channel_id: $failed_chan_id }]);
+						vec![HTLCDestination::NextHopChannel { node_id: Some($next_node.node.get_our_node_id()), channel_id: $failed_chan_id, reason: None }]);
 				},
 				ProcessPendingHTLCsCheck::FwdChannelClosed => {
 					// Force close the next-hop channel so when we go to forward in process_pending_htlc_forwards,
@@ -1243,7 +1243,7 @@ fn min_htlc() {
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed_destinations!(
 		nodes[1].node.get_and_clear_pending_events(),
-		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2 }]
+		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2, reason: None }]
 	);
 	check_added_monitors(&nodes[1], 1);
 	let mut updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());

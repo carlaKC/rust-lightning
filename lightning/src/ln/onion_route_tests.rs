@@ -313,7 +313,7 @@ fn test_fee_failures() {
 	run_onion_failure_test("fee_insufficient", 100, &nodes, &route, &payment_hash, &payment_secret, |msg| {
 		msg.amount_msat -= 1;
 	}, || {}, true, Some(UPDATE|12), Some(NetworkUpdate::ChannelFailure { short_channel_id, is_permanent: false}), Some(short_channel_id),
-	Some(HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channels[1].2 }));
+	Some(HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channels[1].2, reason: None}));
 
 	// In an earlier version, we spuriously failed to forward payments if the expected feerate
 	// changed between the channel open and the payment.
@@ -359,7 +359,7 @@ fn test_onion_failure() {
 	// positive case
 	send_payment(&nodes[0], &vec!(&nodes[1], &nodes[2])[..], 40000);
 
-	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channels[1].2 };
+	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channels[1].2, reason: None };
 
 	// intermediate node failure
 	let short_channel_id = channels[1].0.contents.short_channel_id;
@@ -876,7 +876,7 @@ fn do_test_onion_failure_stale_channel_update(announce_for_forwarding: bool) {
 		run_onion_failure_test(
 			name, 100, &nodes, &route, &payment_hash, &payment_secret, |_| {}, || {}, true,
 			Some(error_code), Some(network_update), Some(short_channel_id),
-			Some(HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channel_to_update.0 }),
+			Some(HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: channel_to_update.0, reason: None }),
 		);
 	};
 

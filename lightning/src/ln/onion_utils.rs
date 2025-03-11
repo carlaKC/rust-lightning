@@ -1258,6 +1258,117 @@ where
 	}
 }
 
+/// The reason that a HTLC was failed locally, rather than being fowarded onwards or accepted as
+/// a payment.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum HTLCFailureDetails {
+	/// The raw BOLT04 failure code for the HTLC.
+	///
+	/// See: https://github.com/lightning/bolts/blob/master/04-onion-routing.md#returning-errors.
+	FailureCode { code: u16 },
+	/// A failure reason that provides information that would otherwise be erased by a raw BOLT04
+	/// error code, or directly maps an informative BOLT04 code to human readable value.
+	FailureReason { reason: LocalHTLCFailureReason },
+}
+
+impl HTLCFailureDetails {
+	pub(super) fn failure_code(&self) -> u16 {
+		match self {
+			Self::FailureCode { code } => *code,
+			Self::FailureReason { reason } => reason.failure_code(),
+		}
+	}
+}
+
+/// The reason that a HTLC was failed by the local node. These errors either represent direct,
+/// human-readable mappings of BOLT04 error codes or provide additional information that would
+/// otherwise be erased by the BOLT04 error code.
+///
+/// For example:
+/// [`Self::FeeInsufficient`] is a direct representation of its underlying BOLT04 error code.
+/// [`Self::PrivateChanelForward`] provides additional information that is not provided by its
+///  BOLT04 error code.
+///
+// Variants should be added to this enum when they are interesting to surface in
+// [`events::HTLCDestination`].
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub enum LocalHTLCFailureReason {
+	DustLimitReached { holder_commitment: bool },
+	FeeSpikeBuffer,
+	ShutdownSent,
+	PrivateChannelForward,
+	RealSCIDForward,
+	ChannelNotReady,
+	FeeInsufficient,
+	IncorrectCLTVDetla,
+	ChannelDisabled,
+	HTLCBelowMinimum,
+	InvalidKeysendPreimage,
+	PaymentSecretRequired,
+	IncorrectHTLCAmount,
+	CLTVExpiryTooClose,
+	CLTVExpiryTooFar,
+	OutgoingCLTVTooClose,
+	NodeIDForward,
+}
+
+impl Into<HTLCFailureDetails> for LocalHTLCFailureReason {
+	fn into(self) -> HTLCFailureDetails {
+		HTLCFailureDetails::FailureReason { reason: self }
+	}
+}
+
+impl Into<HTLCFailureDetails> for u16 {
+	fn into(self) -> HTLCFailureDetails {
+		HTLCFailureDetails::FailureCode { code: self }
+	}
+}
+
+impl LocalHTLCFailureReason {
+	fn failure_code(&self) -> u16 {
+		match self {
+			Self::DustLimitReached { .. } | Self::FeeSpikeBuffer | Self::ChannelNotReady => {
+				0x1000 | 7
+			},
+			Self::ShutdownSent => 0x4000 | 8,
+			Self::PrivateChannelForward | Self::RealSCIDForward | Self::NodeIDForward => {
+				0x4000 | 10
+			},
+			Self::FeeInsufficient => 0x1000 | 12,
+			Self::IncorrectCLTVDetla => 0x1000 | 13,
+			Self::CLTVExpiryTooClose | Self::OutgoingCLTVTooClose => 0x1000 | 14,
+			Self::ChannelDisabled => 0x1000 | 20,
+			Self::HTLCBelowMinimum => 0x1000 | 11,
+			Self::InvalidKeysendPreimage => 0x4000 | 22,
+			Self::PaymentSecretRequired => 0x4000 | 0x2000 | 3,
+			Self::IncorrectHTLCAmount => 19,
+			Self::CLTVExpiryTooFar => 21,
+		}
+	}
+}
+
+impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
+	(0,DustLimitReached) => {
+		(0, holder_commitment, required),
+	},
+	(1, FeeSpikeBuffer) => {},
+	(2, ShutdownSent) => {},
+	(3, PrivateChannelForward) => {},
+	(4, RealSCIDForward) => {},
+	(5, ChannelNotReady) => {},
+	(6, FeeInsufficient) => {},
+	(7, IncorrectCLTVDetla) => {},
+	(8, ChannelDisabled) => {},
+	(9, HTLCBelowMinimum) => {},
+	(10, InvalidKeysendPreimage) => {},
+	(11, PaymentSecretRequired) => {},
+	(12, IncorrectHTLCAmount) => {},
+	(13, CLTVExpiryTooClose) => {},
+	(14, CLTVExpiryTooFar) => {},
+	(15, OutgoingCLTVTooClose) => {},
+	(16, NodeIDForward) => {},
+);
+
 #[derive(Clone)] // See Channel::revoke_and_ack for why, tl;dr: Rust bug
 #[cfg_attr(test, derive(PartialEq))]
 pub(super) struct HTLCFailReason(HTLCFailReasonRepr);

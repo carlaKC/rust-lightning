@@ -2129,7 +2129,7 @@ pub fn do_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '
 
 	if fail_backwards {
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(node_a,
-			vec![crate::events::HTLCDestination::NextHopChannel{ node_id: Some(node_b.node.get_our_node_id()), channel_id: commitment_signed.channel_id }]);
+			vec![crate::events::HTLCDestination::NextHopChannel{ node_id: Some(node_b.node.get_our_node_id()), channel_id: commitment_signed.channel_id, reason: None }]);
 		check_added_monitors!(node_a, 1);
 
 		let node_a_per_peer_state = node_a.node.per_peer_state.read().unwrap();
@@ -3192,7 +3192,7 @@ pub fn pass_failed_payment_back<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expe
 				node.node.handle_update_fail_htlc(prev_node.node.get_our_node_id(), &next_msgs.as_ref().unwrap().0);
 				commitment_signed_dance!(node, prev_node, next_msgs.as_ref().unwrap().1, update_next_node);
 				if !update_next_node {
-					expect_pending_htlcs_forwardable_and_htlc_handling_failed!(node, vec![HTLCDestination::NextHopChannel { node_id: Some(prev_node.node.get_our_node_id()), channel_id: next_msgs.as_ref().unwrap().0.channel_id }]);
+					expect_pending_htlcs_forwardable_and_htlc_handling_failed!(node, vec![HTLCDestination::NextHopChannel { node_id: Some(prev_node.node.get_our_node_id()), channel_id: next_msgs.as_ref().unwrap().0.channel_id, reason: None }]);
 				}
 			}
 			let events = node.node.get_and_clear_pending_msg_events();

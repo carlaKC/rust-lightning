@@ -515,7 +515,7 @@ where
 		return Err(HTLCFailureMsg::Relay(msgs::UpdateFailHTLC {
 			channel_id: msg.channel_id,
 			htlc_id: msg.htlc_id,
-			reason: HTLCFailReason::reason(err_code, data.to_vec())
+			reason: HTLCFailReason::reason(err_code.into(), data.to_vec())
 				.get_encrypted_failure_packet(&shared_secret, &trampoline_shared_secret),
 		}));
 	};

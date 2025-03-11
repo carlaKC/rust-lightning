@@ -128,7 +128,7 @@ fn mpp_retry() {
 
 	// Attempt to forward the payment and complete the 2nd path's failure.
 	expect_pending_htlcs_forwardable!(&nodes[2]);
-	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[2], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_id }]);
+	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[2], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_id, reason: None }]);
 	let htlc_updates = get_htlc_update_msgs!(nodes[2], nodes[0].node.get_our_node_id());
 	assert!(htlc_updates.update_add_htlcs.is_empty());
 	assert_eq!(htlc_updates.update_fail_htlcs.len(), 1);
@@ -234,7 +234,7 @@ fn mpp_retry_overpay() {
 	expect_pending_htlcs_forwardable!(&nodes[2]);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[2],
 		vec![HTLCDestination::NextHopChannel {
-			node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_id
+			node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_id, reason: None,
 		}]
 	);
 	let htlc_updates = get_htlc_update_msgs!(nodes[2], nodes[0].node.get_our_node_id());
@@ -337,7 +337,7 @@ fn do_mpp_receive_timeout(send_partial_mpp: bool) {
 		commitment_signed_dance!(nodes[1], nodes[3], htlc_fail_updates_3_1.commitment_signed, false);
 
 		// Failed HTLC from node 1 -> 0
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_3_id }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_3_id, reason: None }]);
 		let htlc_fail_updates_1_0 = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert_eq!(htlc_fail_updates_1_0.update_fail_htlcs.len(), 1);
 		nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &htlc_fail_updates_1_0.update_fail_htlcs[0]);
@@ -572,7 +572,7 @@ fn test_reject_mpp_keysend_htlc_mismatching_secret() {
 	let update_fail_0 = get_htlc_update_msgs!(&nodes[3], &nodes[2].node.get_our_node_id());
 	nodes[2].node.handle_update_fail_htlc(nodes[3].node.get_our_node_id(), &update_fail_0.update_fail_htlcs[0]);
 	commitment_signed_dance!(nodes[2], nodes[3], update_fail_0.commitment_signed, false);
-	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_channel_id }]);
+	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_4_channel_id, reason: None }]);
 	check_added_monitors!(nodes[2], 1);
 
 	let update_fail_1 = get_htlc_update_msgs!(nodes[2], nodes[0].node.get_our_node_id());
@@ -663,7 +663,7 @@ fn do_retry_with_no_persist(confirm_before_reload: bool) {
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed_destinations!(
 		nodes[1].node.get_and_clear_pending_events(),
-		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2}]
+		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2, reason: None }]
 	);
 	check_added_monitors(&nodes[1], 1);
 	// nodes[1] now immediately fails the HTLC as the next-hop channel is disconnected
@@ -921,7 +921,7 @@ fn do_test_completed_payment_not_retryable_on_reload(use_dust: bool) {
 	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &htlc_fulfill_updates.update_fail_htlcs[0]);
 	commitment_signed_dance!(nodes[1], nodes[2], htlc_fulfill_updates.commitment_signed, false);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1],
-		[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2 }]);
+		[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2, reason: None }]);
 
 	// Connect the HTLC-Timeout transaction, timing out the HTLC on both nodes (but not confirming
 	// the HTLC-Timeout transaction beyond 1 conf). For dust HTLCs, the HTLC is considered resolved
@@ -2234,6 +2234,7 @@ fn do_automatic_retries(test: AutoRetry) {
 				vec![HTLCDestination::NextHopChannel {
 					node_id: Some(nodes[2].node.get_our_node_id()),
 					channel_id: $failing_channel_id,
+					reason: None,
 				}]);
 			nodes[1].node.process_pending_htlc_forwards();
 			let update_1 = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
@@ -3022,7 +3023,7 @@ fn no_extra_retries_on_back_to_back_fail() {
 	check_added_monitors!(nodes[1], 1);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2 };
+	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2, reason: None };
 	expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[next_hop_failure.clone(), next_hop_failure.clone()]);
 	check_added_monitors(&nodes[1], 1);
 
@@ -3213,7 +3214,7 @@ fn test_simple_partial_retry() {
 	commitment_signed_dance!(nodes[1], nodes[0], second_htlc_updates.commitment_msg, false);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2 };
+	let next_hop_failure = HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2, reason: None };
 	expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[next_hop_failure.clone()]);
 	check_added_monitors(&nodes[1], 2);
 
@@ -3818,7 +3819,8 @@ fn test_retry_custom_tlvs() {
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[1],
 		vec![HTLCDestination::NextHopChannel {
 			node_id: Some(nodes[2].node.get_our_node_id()),
-			channel_id: chan_2_id
+			channel_id: chan_2_id,
+			reason: None,
 		}]);
 	check_added_monitors!(nodes[1], 1);
 
@@ -4005,7 +4007,8 @@ fn do_test_custom_tlvs_consistency(first_tlvs: Vec<(u64, Vec<u8>)>, second_tlvs:
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![
 			HTLCDestination::NextHopChannel {
 				node_id: Some(nodes[3].node.get_our_node_id()),
-				channel_id: chan_2_3.2
+				channel_id: chan_2_3.2,
+				reason: None,
 			}]);
 		check_added_monitors!(nodes[2], 1);
 
@@ -4089,7 +4092,7 @@ fn do_test_payment_metadata_consistency(do_reload: bool, do_modify: bool) {
 	expect_pending_htlcs_forwardable!(nodes[2]);
 	expect_htlc_handling_failed_destinations!(
 		nodes[2].node.get_and_clear_pending_events(),
-		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_id_cd }]
+		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_id_cd, reason: None }]
 	);
 	check_added_monitors(&nodes[2], 1);
 
@@ -4156,7 +4159,7 @@ fn do_test_payment_metadata_consistency(do_reload: bool, do_modify: bool) {
 		nodes[2].node.handle_update_fail_htlc(nodes[3].node.get_our_node_id(), &ds_fail.update_fail_htlcs[0]);
 		commitment_signed_dance!(nodes[2], nodes[3], ds_fail.commitment_signed, false, true);
 		expect_pending_htlcs_forwardable_conditions(nodes[2].node.get_and_clear_pending_events(),
-			&[HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: cd_channel_used }]);
+			&[HTLCDestination::NextHopChannel { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: cd_channel_used, reason: None }]);
 	} else {
 		expect_pending_htlcs_forwardable!(nodes[3]);
 		expect_payment_claimable!(nodes[3], payment_hash, payment_secret, amt_msat);
@@ -4239,7 +4242,8 @@ fn  test_htlc_forward_considers_anchor_outputs_value() {
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[1], vec![HTLCDestination::NextHopChannel {
 		node_id: Some(nodes[2].node.get_our_node_id()),
-		channel_id: chan_id_2
+		channel_id: chan_id_2,
+		reason: None,
 	}]);
 	check_added_monitors(&nodes[1], 1);
 
@@ -4404,7 +4408,7 @@ fn test_non_strict_forwarding() {
 	};
 	// The failure to forward will refer to the channel given in the onion.
 	expect_pending_htlcs_forwardable_conditions(nodes[1].node.get_and_clear_pending_events(),
-		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: routed_channel_id }]);
+		&[HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: routed_channel_id, reason: None }]);
 
 	let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &updates.update_fail_htlcs[0]);

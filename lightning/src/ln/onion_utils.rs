@@ -1392,7 +1392,7 @@ pub(super) struct HTLCFailReason(HTLCFailReasonRepr);
 #[cfg_attr(test, derive(PartialEq))]
 enum HTLCFailReasonRepr {
 	LightningError { err: msgs::OnionErrorPacket },
-	Reason { failure_code: u16, data: Vec<u8> },
+	Reason { failure_code: u16, data: Vec<u8>, reason: Option<LocalHTLCFailureReason> },
 }
 
 impl core::fmt::Debug for HTLCFailReason {
@@ -1425,6 +1425,7 @@ impl_writeable_tlv_based_enum!(HTLCFailReasonRepr,
 	},
 	(1, Reason) => {
 		(0, failure_code, required),
+		(1, reason, option),
 		(2, data, required_vec),
 	},
 );
@@ -1466,7 +1467,7 @@ impl HTLCFailReason {
 		}
 		else { debug_assert!(false, "Unknown failure code: {}", failure_code) }
 
-		Self(HTLCFailReasonRepr::Reason { failure_code, data })
+		Self(HTLCFailReasonRepr::Reason { failure_code, data, reason: Some(failure_reason) })
 	}
 
 	pub(super) fn from_failure_code(failure_reason: LocalHTLCFailureReason) -> Self {
@@ -1486,7 +1487,7 @@ impl HTLCFailReason {
 		&self, incoming_packet_shared_secret: &[u8; 32], secondary_shared_secret: &Option<[u8; 32]>,
 	) -> msgs::OnionErrorPacket {
 		match self.0 {
-			HTLCFailReasonRepr::Reason { ref failure_code, ref data } => {
+			HTLCFailReasonRepr::Reason { ref failure_code, ref data, .. } => {
 				if let Some(secondary_shared_secret) = secondary_shared_secret {
 					let inner_packet =
 						build_failure_packet(secondary_shared_secret, *failure_code, &data[..])

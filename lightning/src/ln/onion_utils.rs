@@ -1306,46 +1306,84 @@ pub enum LocalHTLCFailureReason {
 	ChannelClosed,
 }
 
+
 impl LocalHTLCFailureReason {
-	pub(super) fn failure_code(&self) -> u16 {
-		match self {
-			Self::TemporaryNodeFailure => NODE | 2,
-			Self::PermanentNodeFailure => PERM | NODE | 2,
-			Self::RequiredNodeFeature | Self::PaymentSecretRequired => PERM | NODE | 3,
-			Self::InvalidOnionVersion => BADONION | PERM | 4,
-			Self::InvalidOnionHMAC => BADONION | PERM | 5,
-			Self::InvalidOnionKey => BADONION | PERM | 6,
-			Self::TemporaryChannelFailure
-			| Self::DustLimitHolder
-			| Self::DustLimitCounterparty
-			| Self::FeeSpikeBuffer
-			| Self::ChannelNotReady => UPDATE | 7,
-			Self::PermanentChannelFailure | Self::ChannelClosed | Self::ShutdownSent => PERM | 8,
-			Self::RequiredChannelFeature => PERM | 9,
-			Self::UnknownNextPeer | Self::PrivateChannelForward | Self::RealSCIDForward => {
-				PERM | 10
-			},
-			Self::AmountBelowMinimum => UPDATE | 11,
-			Self::FeeInsufficient => UPDATE | 12,
-			Self::IncorrectCLTVExpiry => UPDATE | 13,
-			Self::CLTVExpiryTooSoon | Self::ForwardExpiryBuffer => UPDATE | 14,
-			Self::IncorrectPaymentDetails | Self::PaymentClaimBuffer => UPDATE | 15,
-			Self::FinalIncorrectCLTVExpiry => 18,
-			Self::FinalIncorrectHTLCAmount => 19,
-			Self::ChannelDisabled => UPDATE | 20,
-			Self::CLTVExpiryTooFar => PERM | 21,
-			Self::InvalidOnionPayload
-			| Self::InvalidTrampolineRoute
-			| Self::InvalidKeysendPreimage => PERM | 22,
-			Self::MPPTimeout => 23,
-			Self::InvalidOnionBlinding => BADONION | PERM | 24,
-		}
-	}
+	// Maps variants that directly represent BOLT04 error codes to their numerical value.
+	const BOLT04_CODES: &'static[(Self, u16)] = &[
+  		(Self::TemporaryNodeFailure, NODE | 2),
+        (Self::PermanentNodeFailure, PERM | NODE | 2),
+        (Self::RequiredNodeFeature, PERM | NODE | 3),
+        (Self::InvalidOnionVersion, BADONION | PERM | 4),
+        (Self::InvalidOnionHMAC, BADONION | PERM | 5),
+        (Self::InvalidOnionKey, BADONION | PERM | 6),
+        (Self::TemporaryChannelFailure, UPDATE | 7),
+        (Self::PermanentChannelFailure, PERM | 8),
+        (Self::RequiredChannelFeature, PERM | 9),
+        (Self::UnknownNextPeer, PERM | 10),
+        (Self::AmountBelowMinimum, UPDATE | 11),
+        (Self::FeeInsufficient, UPDATE | 12),
+        (Self::IncorrectCLTVExpiry, UPDATE | 13),
+        (Self::CLTVExpiryTooSoon, UPDATE | 14),
+        (Self::IncorrectPaymentDetails, UPDATE | 15),
+        (Self::FinalIncorrectCLTVExpiry, 18),
+        (Self::FinalIncorrectHTLCAmount, 19),
+        (Self::ChannelDisabled, UPDATE | 20),
+        (Self::CLTVExpiryTooFar, PERM | 21),
+        (Self::InvalidOnionPayload, PERM | 22),
+        (Self::MPPTimeout, 23),
+        (Self::InvalidOnionBlinding, BADONION | PERM | 24),
+	];
+
+	// Maps variants that add additional information to a BOLT04 error code to variant that it
+	// represents.
+	const BOLT04_MAPPING: &'static[(Self, Self)] = &[
+		(Self::DustLimitHolder, Self::TemporaryChannelFailure),
+        (Self::DustLimitCounterparty, Self::TemporaryChannelFailure),
+        (Self::FeeSpikeBuffer, Self::TemporaryChannelFailure),
+        (Self::ChannelNotReady, Self::TemporaryChannelFailure),
+        (Self::ChannelClosed, Self::PermanentChannelFailure),
+        (Self::ShutdownSent, Self::PermanentChannelFailure),
+        (Self::PrivateChannelForward, Self::UnknownNextPeer),
+        (Self::RealSCIDForward, Self::UnknownNextPeer),
+        (Self::ForwardExpiryBuffer, Self::CLTVExpiryTooSoon),
+        (Self::PaymentClaimBuffer, Self::IncorrectPaymentDetails),
+        (Self::InvalidTrampolineRoute, Self::InvalidOnionPayload),
+        (Self::InvalidKeysendPreimage, Self::InvalidOnionPayload),
+	];
 
 	pub(super) fn is_temporary(&self) -> bool {
 		self.failure_code() & 0x1000 == 0x1000
 	}
 }
+
+impl TryFrom<u16> for LocalHTLCFailureReason {
+    type Error = ();
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+		Self::BOLT04_CODES.iter().find(|(reason, code)| value == *code).map(|(reason, _)| reason.clone()).ok_or(())
+    }
+}
+
+impl TryInto<u16> for LocalHTLCFailureReason {
+    type Error = ();
+
+    fn try_into(self) -> Result<u16, Self::Error> {
+		let bolt_04_code = if let Some(bolt04) = Self::BOLT04_MAPPING.iter().find(|(reason, _)| reason == self).map(|(_, b04)| *b04) {
+			bolt04
+		} else {
+			self
+		};
+
+		if let Some(code) = Self::BOLT04_CODES.iter().find(|(reason, code)| *reason == bolt_04_code).map(|(_, code)| *code) {
+			return Ok(code)
+		}
+
+		// We should have all of our codes internally mapped.
+		debug_assert!(false);
+		Err(())
+    }
+}
+
 
 impl_writeable_tlv_based_enum!(LocalHTLCFailureReason,
 	(0, DustLimitHolder) => {},

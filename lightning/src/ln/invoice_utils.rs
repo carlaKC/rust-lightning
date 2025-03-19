@@ -1320,7 +1320,7 @@ mod test {
 			(SendEvent::from_event(events.remove(0)), fwd_idx)
 		};
 		nodes[fwd_idx].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &payment_event.msgs[0]);
-		commitment_signed_dance!(nodes[fwd_idx], nodes[0], &payment_event.commitment_msg, false, true);
+		commitment_signed_dance!(nodes[fwd_idx], nodes[0], &payment_event.commitment_msg, None, true);
 
 		// Note that we have to "forward pending HTLCs" twice before we see the PaymentClaimable as
 		// this "emulates" the payment taking two hops, providing some privacy to make phantom node

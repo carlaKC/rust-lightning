@@ -432,7 +432,7 @@ mod test {
 		check_added_monitors(&nodes[0], 1);
 		let updates = get_htlc_update_msgs!(nodes[0], payee_id);
 		nodes[1].node.handle_update_add_htlc(payer_id, &updates.update_add_htlcs[0]);
-		commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, false);
+		commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, None);
 		expect_pending_htlcs_forwardable!(nodes[1]);
 
 		let claimable_events = nodes[1].node.get_and_clear_pending_events();
@@ -455,7 +455,7 @@ mod test {
 		check_added_monitors(&nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], payer_id);
 		nodes[0].node.handle_update_fulfill_htlc(payee_id, &updates.update_fulfill_htlcs[0]);
-		commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, false);
+		commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, None);
 
 		expect_payment_sent(&nodes[0], our_payment_preimage, None, true, true);
 	}

@@ -2071,7 +2071,7 @@ macro_rules! commitment_signed_dance {
 /// the commitment we're exchanging. `includes_claim` provides that information.
 ///
 /// Returns any additional message `node_b` generated in addition to the `revoke_and_ack` response.
-pub fn commitment_signed_dance_through_cp_raa(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, fail_backwards: bool, includes_claim: bool) -> Option<MessageSendEvent> {
+pub fn commitment_signed_dance_through_cp_raa(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, fail_backwards: Option<FailureType>, includes_claim: bool) -> Option<MessageSendEvent> {
 	let (extra_msg_option, bs_revoke_and_ack) = do_main_commitment_signed_dance(node_a, node_b, fail_backwards);
 	node_a.node.handle_revoke_and_ack(node_b.node.get_our_node_id(), &bs_revoke_and_ack);
 	check_added_monitors(node_a, if includes_claim { 0 } else { 1 });
@@ -2082,7 +2082,7 @@ pub fn commitment_signed_dance_through_cp_raa(node_a: &Node<'_, '_, '_>, node_b:
 /// been delivered, this method picks up and delivers the response `revoke_and_ack` and
 /// `commitment_signed`, returning the recipient's `revoke_and_ack` and any extra message it may
 /// have included.
-pub fn do_main_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, fail_backwards: bool) -> (Option<MessageSendEvent>, msgs::RevokeAndACK) {
+pub fn do_main_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, fail_backwards: Option<FailureType>) -> (Option<MessageSendEvent>, msgs::RevokeAndACK) {
 	let (as_revoke_and_ack, as_commitment_signed) = get_revoke_commit_msgs!(node_a, node_b.node.get_our_node_id());
 	check_added_monitors!(node_b, 0);
 	assert!(node_b.node.get_and_clear_pending_msg_events().is_empty());
@@ -2103,19 +2103,31 @@ pub fn do_main_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<
 		}, events.get(0).map(|e| e.clone()))
 	};
 	check_added_monitors!(node_b, 1);
-	if fail_backwards {
+	if fail_backwards.is_some() {
 		assert!(node_a.node.get_and_clear_pending_events().is_empty());
 		assert!(node_a.node.get_and_clear_pending_msg_events().is_empty());
 	}
 	(extra_msg_option, bs_revoke_and_ack)
 }
 
+/// Describes the type of HTLC that's being failed backwards.
+#[derive(Copy, Clone)]
+pub enum FailureType {
+	/// Payment was failed within a blinded route.
+	Blinded,
+	/// Payment was failed by the downstream peer.
+	Downstream,
+}
+
 /// Runs a full commitment_signed dance, delivering a commitment_signed, the responding
 /// `revoke_and_ack` and `commitment_signed`, and then the final `revoke_and_ack` response.
 ///
+/// If `fail_backwards` is Some, asserts that a HTLC is failed backwards by the commitment signed
+/// dance.
+///
 /// If `skip_last_step` is unset, also checks for the payment failure update for the previous hop
 /// on failure or that no new messages are left over on success.
-pub fn do_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, commitment_signed: &msgs::CommitmentSigned, fail_backwards: bool, skip_last_step: bool) {
+pub fn do_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '_, '_>, commitment_signed: &msgs::CommitmentSigned, fail_backwards: Option<FailureType>, skip_last_step: bool) {
 	check_added_monitors!(node_a, 0);
 	assert!(node_a.node.get_and_clear_pending_msg_events().is_empty());
 	node_a.node.handle_commitment_signed(node_b.node.get_our_node_id(), commitment_signed);
@@ -2123,12 +2135,12 @@ pub fn do_commitment_signed_dance(node_a: &Node<'_, '_, '_>, node_b: &Node<'_, '
 
 	// If this commitment signed dance was due to a claim, don't check for an RAA monitor update.
 	let got_claim = node_a.node.test_raa_monitor_updates_held(node_b.node.get_our_node_id(), commitment_signed.channel_id);
-	if fail_backwards { assert!(!got_claim); }
+	if fail_backwards.is_some() { assert!(!got_claim); }
 	commitment_signed_dance!(node_a, node_b, (), fail_backwards, true, false, got_claim);
 
 	if skip_last_step { return; }
 
-	if fail_backwards {
+	if let Some(_) = fail_backwards {
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(node_a,
 			vec![crate::events::HTLCDestination::NextHopChannel{ node_id: Some(node_b.node.get_our_node_id()), channel_id: commitment_signed.channel_id }]);
 		check_added_monitors!(node_a, 1);
@@ -2642,7 +2654,7 @@ fn fail_payment_along_path<'a, 'b, 'c>(expected_path: &[&Node<'a, 'b, 'c>]) {
 
 		let is_first_hop = origin_node_id == prev_node.node.get_our_node_id();
 		// We do not want to fail backwards on the first hop. All other hops should fail backwards.
-		commitment_signed_dance!(prev_node, node, updates.commitment_signed, !is_first_hop);
+		commitment_signed_dance!(prev_node, node, updates.commitment_signed, if is_first_hop { None } else { Some(FailureType::Downstream) });
 	}
 }
 
@@ -2729,11 +2741,11 @@ pub fn do_pass_along_path<'a, 'b, 'c>(args: PassAlongPathArgs) -> Option<Event> 
 		check_added_monitors!(node, 0);
 
 		if is_last_hop && is_probe {
-			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, true, true);
+			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, Some(FailureType::Downstream), true);
 			expect_pending_htlcs_forwardable!(node);
 			check_added_monitors(node, 1);
 		} else {
-			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, false);
+			commitment_signed_dance!(node, prev_node, payment_event.commitment_msg, None);
 			expect_pending_htlcs_forwardable!(node);
 		}
 
@@ -3018,7 +3030,7 @@ pub fn pass_claimed_payment_along_route(args: ClaimAlongRouteArgs) -> u64 {
 					$node.node.handle_update_fulfill_htlc($prev_node.node.get_our_node_id(), &next_msgs.as_ref().unwrap().0);
 					check_added_monitors!($node, 0);
 					assert!($node.node.get_and_clear_pending_msg_events().is_empty());
-					commitment_signed_dance!($node, $prev_node, next_msgs.as_ref().unwrap().1, false);
+					commitment_signed_dance!($node, $prev_node, next_msgs.as_ref().unwrap().1, None);
 				}
 			}
 		}
@@ -3066,7 +3078,7 @@ pub fn pass_claimed_payment_along_route(args: ClaimAlongRouteArgs) -> u64 {
 						assert!($node.node.get_and_clear_pending_msg_events().is_empty());
 						None
 					};
-					commitment_signed_dance!($node, $prev_node, next_msgs.as_ref().unwrap().1, false);
+					commitment_signed_dance!($node, $prev_node, next_msgs.as_ref().unwrap().1, None);
 					next_msgs = new_next_msgs;
 				}
 			}
@@ -3192,7 +3204,7 @@ pub fn pass_failed_payment_back<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expe
 			let update_next_node = !skip_last || idx != expected_route.len() - 1;
 			if next_msgs.is_some() {
 				node.node.handle_update_fail_htlc(prev_node.node.get_our_node_id(), &next_msgs.as_ref().unwrap().0);
-				commitment_signed_dance!(node, prev_node, next_msgs.as_ref().unwrap().1, update_next_node);
+				commitment_signed_dance!(node, prev_node, next_msgs.as_ref().unwrap().1, if update_next_node { Some(FailureType::Downstream) } else { None });
 				if !update_next_node {
 					expect_pending_htlcs_forwardable_and_htlc_handling_failed!(node, vec![HTLCDestination::NextHopChannel { node_id: Some(prev_node.node.get_our_node_id()), channel_id: next_msgs.as_ref().unwrap().0.channel_id }]);
 				}
@@ -3227,7 +3239,7 @@ pub fn pass_failed_payment_back<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expe
 			origin_node.node.handle_update_fail_htlc(prev_node.node.get_our_node_id(), &next_msgs.as_ref().unwrap().0);
 			check_added_monitors!(origin_node, 0);
 			assert!(origin_node.node.get_and_clear_pending_msg_events().is_empty());
-			commitment_signed_dance!(origin_node, prev_node, next_msgs.as_ref().unwrap().1, false);
+			commitment_signed_dance!(origin_node, prev_node, next_msgs.as_ref().unwrap().1, None);
 			let events = origin_node.node.get_and_clear_pending_events();
 			if i == expected_paths.len() - 1 { assert_eq!(events.len(), 2); } else { assert_eq!(events.len(), 1); }
 
@@ -3880,7 +3892,7 @@ pub fn reconnect_nodes<'a, 'b, 'c, 'd>(args: ReconnectArgs<'a, 'b, 'c, 'd>) {
 			}
 
 			if !pending_responding_commitment_signed.0 {
-				commitment_signed_dance!(node_a, node_b, commitment_update.commitment_signed, false);
+				commitment_signed_dance!(node_a, node_b, commitment_update.commitment_signed, None);
 			} else {
 				node_a.node.handle_commitment_signed(node_b.node.get_our_node_id(), &commitment_update.commitment_signed);
 				check_added_monitors!(node_a, 1);
@@ -3938,7 +3950,7 @@ pub fn reconnect_nodes<'a, 'b, 'c, 'd>(args: ReconnectArgs<'a, 'b, 'c, 'd>) {
 			}
 
 			if !pending_responding_commitment_signed.1 {
-				commitment_signed_dance!(node_b, node_a, commitment_update.commitment_signed, false);
+				commitment_signed_dance!(node_b, node_a, commitment_update.commitment_signed, None);
 			} else {
 				node_b.node.handle_commitment_signed(node_a.node.get_our_node_id(), &commitment_update.commitment_signed);
 				check_added_monitors!(node_b, 1);

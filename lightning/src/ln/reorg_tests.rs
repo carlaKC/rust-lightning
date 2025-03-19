@@ -143,7 +143,7 @@ fn do_test_onchain_htlc_reorg(local_commitment: bool, claim: bool) {
 		assert_eq!(htlc_updates.update_fail_htlcs.len(), 1);
 		nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &htlc_updates.update_fail_htlcs[0]);
 	}
-	commitment_signed_dance!(nodes[0], nodes[1], htlc_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[0], nodes[1], htlc_updates.commitment_signed, None, true);
 	if claim {
 		expect_payment_sent!(nodes[0], our_payment_preimage);
 	} else {
@@ -815,7 +815,7 @@ fn do_test_retries_own_commitment_broadcast_after_reorg(anchors: bool, revoked_c
 
 		let fee_update = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 		nodes[1].node.handle_update_fee(nodes[0].node.get_our_node_id(), &fee_update.update_fee.unwrap());
-		commitment_signed_dance!(nodes[1], nodes[0], fee_update.commitment_signed, false);
+		commitment_signed_dance!(nodes[1], nodes[0], fee_update.commitment_signed, None);
 
 		reload_node!(
 			nodes[1], config, &serialized_node, &[&serialized_monitor], persister, new_chain_monitor, nodes_1_deserialized

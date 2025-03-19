@@ -158,7 +158,7 @@ fn do_test_simple_monitor_temporary_update_fail(disconnect: bool) {
 	let payment_event = SendEvent::from_event(events_2.pop().unwrap());
 	assert_eq!(payment_event.node_id, nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &payment_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
+	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, None);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 
@@ -849,7 +849,7 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 
 	let mut send_event = SendEvent::from_event(nodes[0].node.get_and_clear_pending_msg_events().remove(0));
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &send_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], send_event.commitment_msg, false);
+	commitment_signed_dance!(nodes[1], nodes[0], send_event.commitment_msg, None);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	check_added_monitors!(nodes[1], 0);
@@ -875,7 +875,7 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 	chanmon_cfgs[1].persister.set_update_ret(ChannelMonitorUpdateStatus::Completed); // We succeed in updating the monitor for the first channel
 	send_event = SendEvent::from_event(nodes[0].node.get_and_clear_pending_msg_events().remove(0));
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &send_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], send_event.commitment_msg, false, true);
+	commitment_signed_dance!(nodes[1], nodes[0], send_event.commitment_msg, None, true);
 	check_added_monitors!(nodes[1], 0);
 
 	// Call forward_pending_htlcs and check that the new HTLC was simply added to the holding cell
@@ -949,7 +949,7 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 	// Now deliver the new messages...
 
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &messages_a.0);
-	commitment_signed_dance!(nodes[0], nodes[1], messages_a.1, false);
+	commitment_signed_dance!(nodes[0], nodes[1], messages_a.1, None);
 	expect_payment_failed!(nodes[0], payment_hash_1, true);
 
 	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &send_event_b.msgs[0]);
@@ -1056,7 +1056,7 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 		assert_eq!(send_event.node_id, nodes[0].node.get_our_node_id());
 		assert_eq!(send_event.msgs.len(), 1);
 		nodes[0].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &send_event.msgs[0]);
-		commitment_signed_dance!(nodes[0], nodes[1], send_event.commitment_msg, false);
+		commitment_signed_dance!(nodes[0], nodes[1], send_event.commitment_msg, None);
 
 		expect_pending_htlcs_forwardable!(nodes[0]);
 
@@ -1109,7 +1109,7 @@ fn test_monitor_update_fail_reestablish() {
 	expect_payment_forwarded!(nodes[1], nodes[0], nodes[2], Some(1000), false, false);
 	check_added_monitors!(nodes[1], 1);
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
-	commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, None);
 
 	chanmon_cfgs[1].persister.set_update_ret(ChannelMonitorUpdateStatus::InProgress);
 	nodes[0].node.peer_connected(nodes[1].node.get_our_node_id(), &msgs::Init {
@@ -1168,7 +1168,7 @@ fn test_monitor_update_fail_reestablish() {
 	assert!(updates.update_fee.is_none());
 	assert_eq!(updates.update_fulfill_htlcs.len(), 1);
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &updates.update_fulfill_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, None);
 	expect_payment_sent!(nodes[0], payment_preimage);
 }
 
@@ -1638,7 +1638,7 @@ fn test_monitor_update_fail_claim() {
 	nodes[1].node.handle_update_add_htlc(nodes[2].node.get_our_node_id(), &payment_event.msgs[0]);
 	let events = nodes[1].node.get_and_clear_pending_msg_events();
 	assert_eq!(events.len(), 0);
-	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, false, true);
+	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, None, true);
 	expect_pending_htlcs_forwardable_ignore!(nodes[1]);
 
 	let (_, payment_hash_3, payment_secret_3) = get_payment_preimage_hash!(nodes[0]);
@@ -1652,7 +1652,7 @@ fn test_monitor_update_fail_claim() {
 	nodes[1].node.handle_update_add_htlc(nodes[2].node.get_our_node_id(), &payment_event.msgs[0]);
 	let events = nodes[1].node.get_and_clear_pending_msg_events();
 	assert_eq!(events.len(), 0);
-	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, false, true);
+	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, None, true);
 
 	// Now restore monitor updating on the 0<->1 channel and claim the funds on B.
 	let channel_id = chan_1.2;
@@ -1663,7 +1663,7 @@ fn test_monitor_update_fail_claim() {
 
 	let bs_fulfill_update = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_fulfill_update.update_fulfill_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_fulfill_update.commitment_signed, false);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_fulfill_update.commitment_signed, None);
 	expect_payment_sent!(nodes[0], payment_preimage_1);
 
 	// Get the payment forwards, note that they were batched into one commitment update.
@@ -1672,7 +1672,7 @@ fn test_monitor_update_fail_claim() {
 	let bs_forward_update = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &bs_forward_update.update_add_htlcs[0]);
 	nodes[0].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &bs_forward_update.update_add_htlcs[1]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_forward_update.commitment_signed, false);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_forward_update.commitment_signed, None);
 	expect_pending_htlcs_forwardable!(nodes[0]);
 
 	let events = nodes[0].node.get_and_clear_pending_events();
@@ -1735,7 +1735,7 @@ fn test_monitor_update_on_pending_forwards() {
 
 	let cs_fail_update = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &cs_fail_update.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[2], cs_fail_update.commitment_signed, true, true);
+	commitment_signed_dance!(nodes[1], nodes[2], cs_fail_update.commitment_signed, Some(FailureType::Downstream), true);
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
 
 	let (route, payment_hash_2, payment_preimage_2, payment_secret_2) = get_route_and_payment_hash!(nodes[2], nodes[0], 1000000);
@@ -1749,7 +1749,7 @@ fn test_monitor_update_on_pending_forwards() {
 	assert_eq!(events.len(), 1);
 	let payment_event = SendEvent::from_event(events.pop().unwrap());
 	nodes[1].node.handle_update_add_htlc(nodes[2].node.get_our_node_id(), &payment_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, false);
+	commitment_signed_dance!(nodes[1], nodes[2], payment_event.commitment_msg, None);
 
 	chanmon_cfgs[1].persister.set_update_ret(ChannelMonitorUpdateStatus::InProgress);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2 }]);
@@ -1763,7 +1763,7 @@ fn test_monitor_update_on_pending_forwards() {
 	let bs_updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fail_htlcs[0]);
 	nodes[0].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, None, true);
 
 	let events = nodes[0].node.get_and_clear_pending_events();
 	assert_eq!(events.len(), 3);
@@ -1836,7 +1836,7 @@ fn monitor_update_claim_fail_no_response() {
 
 	let bs_updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fulfill_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, None);
 	expect_payment_sent!(nodes[0], payment_preimage_1);
 
 	claim_payment(&nodes[0], &[&nodes[1]], payment_preimage_2);
@@ -2163,7 +2163,7 @@ fn test_fail_htlc_on_broadcast_after_claim() {
 
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fulfill_htlcs[0]);
 	expect_payment_sent(&nodes[0], payment_preimage, None, false, false);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, true, true);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, Some(FailureType::Downstream), true);
 	expect_payment_path_successful!(nodes[0]);
 }
 
@@ -2255,7 +2255,7 @@ fn do_update_fee_resend_test(deliver_update: bool, parallel_updates: bool) {
 		nodes[1].node.handle_revoke_and_ack(nodes[0].node.get_our_node_id(), &as_second_raa);
 		check_added_monitors!(nodes[1], 1);
 	} else {
-		commitment_signed_dance!(nodes[1], nodes[0], update_msgs.commitment_signed, false);
+		commitment_signed_dance!(nodes[1], nodes[0], update_msgs.commitment_signed, None);
 	}
 
 	send_payment(&nodes[0], &[&nodes[1]], 1000);
@@ -2535,7 +2535,7 @@ fn do_test_reconnect_dup_htlc_claims(htlc_status: HTLCStatusAtDupClaim, second_f
 		nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_updates.as_ref().unwrap().update_fulfill_htlcs[0]);
 		expect_payment_sent(&nodes[0], payment_preimage, None, false, false);
 		if htlc_status == HTLCStatusAtDupClaim::Cleared {
-			commitment_signed_dance!(nodes[0], nodes[1], &bs_updates.as_ref().unwrap().commitment_signed, false);
+			commitment_signed_dance!(nodes[0], nodes[1], &bs_updates.as_ref().unwrap().commitment_signed, None);
 			expect_payment_path_successful!(nodes[0]);
 		}
 	} else {
@@ -2567,7 +2567,7 @@ fn do_test_reconnect_dup_htlc_claims(htlc_status: HTLCStatusAtDupClaim, second_f
 		expect_payment_sent(&nodes[0], payment_preimage, None, false, false);
 	}
 	if htlc_status != HTLCStatusAtDupClaim::Cleared {
-		commitment_signed_dance!(nodes[0], nodes[1], &bs_updates.as_ref().unwrap().commitment_signed, false);
+		commitment_signed_dance!(nodes[0], nodes[1], &bs_updates.as_ref().unwrap().commitment_signed, None);
 		expect_payment_path_successful!(nodes[0]);
 	}
 }
@@ -2744,7 +2744,7 @@ fn double_temp_error() {
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &update_fulfill_2);
 	check_added_monitors!(nodes[0], 0);
 	assert!(nodes[0].node.get_and_clear_pending_msg_events().is_empty());
-	commitment_signed_dance!(nodes[0], nodes[1], commitment_signed_b2, false);
+	commitment_signed_dance!(nodes[0], nodes[1], commitment_signed_b2, None);
 	expect_payment_sent!(nodes[0], payment_preimage_2);
 }
 
@@ -2955,7 +2955,7 @@ fn test_blocked_chan_preimage_release() {
 
 	let cs_htlc_fulfill_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_fulfill_htlc(nodes[2].node.get_our_node_id(), &cs_htlc_fulfill_updates.update_fulfill_htlcs[0]);
-	do_commitment_signed_dance(&nodes[1], &nodes[2], &cs_htlc_fulfill_updates.commitment_signed, false, false);
+	do_commitment_signed_dance(&nodes[1], &nodes[2], &cs_htlc_fulfill_updates.commitment_signed, None, false);
 	check_added_monitors(&nodes[1], 0);
 
 	// Now claim the second payment on nodes[0], which will ultimately result in nodes[1] trying to
@@ -2998,7 +2998,7 @@ fn test_blocked_chan_preimage_release() {
 	check_added_monitors(&nodes[1], 1);
 
 	nodes[2].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_htlc_fulfill_updates.update_fulfill_htlcs[0]);
-	do_commitment_signed_dance(&nodes[2], &nodes[1], &bs_htlc_fulfill_updates.commitment_signed, false, false);
+	do_commitment_signed_dance(&nodes[2], &nodes[1], &bs_htlc_fulfill_updates.commitment_signed, None, false);
 	expect_payment_sent(&nodes[2], payment_preimage_2, None, true, true);
 }
 
@@ -3153,7 +3153,7 @@ fn do_test_inverted_mon_completion_order(with_latest_manager: bool, complete_bc_
 	check_added_monitors(&nodes[1], 1);
 
 	nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fulfill_htlcs[0]);
-	do_commitment_signed_dance(&nodes[0], &nodes[1], &bs_updates.commitment_signed, false, false);
+	do_commitment_signed_dance(&nodes[0], &nodes[1], &bs_updates.commitment_signed, None, false);
 
 	expect_payment_forwarded!(nodes[1], &nodes[0], &nodes[2], Some(1_000), false, !with_latest_manager);
 
@@ -3567,7 +3567,7 @@ fn do_test_glacial_peer_cant_hang(hold_chan_a: bool) {
 	if !hold_chan_a {
 		let bs_updates = get_htlc_update_msgs(&nodes[1], &nodes[0].node.get_our_node_id());
 		nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fulfill_htlcs[0]);
-		commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, false);
+		commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, None);
 		expect_payment_sent!(&nodes[0], payment_preimage);
 	}
 
@@ -3624,7 +3624,7 @@ fn do_test_glacial_peer_cant_hang(hold_chan_a: bool) {
 		assert_eq!(c_update.len(), 1);
 
 		nodes[0].node.handle_update_fulfill_htlc(nodes[1].node.get_our_node_id(), &a_update[0].update_fulfill_htlcs[0]);
-		commitment_signed_dance!(nodes[0], nodes[1], a_update[0].commitment_signed, false);
+		commitment_signed_dance!(nodes[0], nodes[1], a_update[0].commitment_signed, None);
 		expect_payment_sent(&nodes[0], payment_preimage, None, true, true);
 		expect_payment_forwarded!(nodes[1], nodes[0], nodes[2], Some(1000), false, false);
 
@@ -3795,7 +3795,7 @@ fn test_claim_to_closed_channel_blocks_forwarded_preimage_removal() {
 	chanmon_cfgs[1].persister.set_update_ret(ChannelMonitorUpdateStatus::InProgress);
 	nodes[1].node.handle_update_fulfill_htlc(nodes[2].node.get_our_node_id(), &updates.update_fulfill_htlcs[0]);
 	check_added_monitors!(nodes[1], 1);
-	commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, None);
 
 	// At this point nodes[1] has the preimage and is waiting for the `ChannelMonitorUpdate` for
 	// channel A to hit disk. Until it does so, it shouldn't ever let the preimage dissapear from

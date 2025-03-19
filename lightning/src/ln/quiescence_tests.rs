@@ -330,7 +330,7 @@ fn quiescence_updates_go_to_holding_cell(fail_htlc: bool) {
 
 	let update_add = get_htlc_update_msgs!(&nodes[0], node_id_1);
 	nodes[1].node.handle_update_add_htlc(node_id_0, &update_add.update_add_htlcs[0]);
-	commitment_signed_dance!(&nodes[1], &nodes[0], update_add.commitment_signed, false);
+	commitment_signed_dance!(&nodes[1], &nodes[0], update_add.commitment_signed, None);
 	expect_pending_htlcs_forwardable!(&nodes[1]);
 	expect_payment_claimable!(nodes[1], payment_hash2, payment_secret2, payment_amount);
 
@@ -364,7 +364,7 @@ fn quiescence_updates_go_to_holding_cell(fail_htlc: bool) {
 	} else {
 		nodes[0].node.handle_update_fulfill_htlc(node_id_1, &update.update_fulfill_htlcs[0]);
 	}
-	commitment_signed_dance!(&nodes[0], &nodes[1], update.commitment_signed, false);
+	commitment_signed_dance!(&nodes[0], &nodes[1], update.commitment_signed, None);
 
 	if !fail_htlc {
 		expect_payment_claimed!(nodes[1], payment_hash2, payment_amount);
@@ -401,7 +401,7 @@ fn quiescence_updates_go_to_holding_cell(fail_htlc: bool) {
 	} else {
 		nodes[1].node.handle_update_fulfill_htlc(node_id_0, &update.update_fulfill_htlcs[0]);
 	}
-	commitment_signed_dance!(&nodes[1], &nodes[0], update.commitment_signed, false);
+	commitment_signed_dance!(&nodes[1], &nodes[0], update.commitment_signed, None);
 
 	// The payment from nodes[1] should now be seen as failed/successful.
 	if fail_htlc {

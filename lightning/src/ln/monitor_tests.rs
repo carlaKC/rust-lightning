@@ -71,7 +71,7 @@ fn chanmon_fail_from_stale_commitment() {
 
 	let updates = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, None);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
@@ -91,7 +91,7 @@ fn chanmon_fail_from_stale_commitment() {
 	let fail_updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &fail_updates.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], fail_updates.commitment_signed, true, true);
+	commitment_signed_dance!(nodes[0], nodes[1], fail_updates.commitment_signed, Some(FailureType::Downstream), true);
 	expect_payment_failed_with_update!(nodes[0], payment_hash, false, update_a.contents.short_channel_id, true);
 }
 
@@ -897,7 +897,7 @@ fn do_test_balances_on_local_commitment_htlcs(anchors: bool) {
 
 	let updates = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, None);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_payment_claimable!(nodes[1], payment_hash, payment_secret, 10_000_000);
@@ -909,7 +909,7 @@ fn do_test_balances_on_local_commitment_htlcs(anchors: bool) {
 
 	let updates = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[0], updates.commitment_signed, None);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_payment_claimable!(nodes[1], payment_hash_2, payment_secret_2, 20_000_000);
@@ -2002,7 +2002,7 @@ fn do_test_revoked_counterparty_aggregated_claims(anchors: bool) {
 
 	let fee_update = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_fee(nodes[0].node.get_our_node_id(), &fee_update.update_fee.unwrap());
-	commitment_signed_dance!(nodes[1], nodes[0], fee_update.commitment_signed, false);
+	commitment_signed_dance!(nodes[1], nodes[0], fee_update.commitment_signed, None);
 
 	nodes[0].node.claim_funds(claimed_payment_preimage);
 	expect_payment_claimed!(nodes[0], claimed_payment_hash, 3_000_100);

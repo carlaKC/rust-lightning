@@ -71,7 +71,7 @@ fn test_priv_forwarding_rejection() {
 	check_added_monitors!(nodes[0], 1);
 	let payment_event = SendEvent::from_event(nodes[0].node.get_and_clear_pending_msg_events().remove(0));
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &payment_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false, true);
+	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, None, true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed_destinations!(
 		nodes[1].node.get_and_clear_pending_events(),
@@ -86,7 +86,7 @@ fn test_priv_forwarding_rejection() {
 	assert!(htlc_fail_updates.update_fee.is_none());
 
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &htlc_fail_updates.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], htlc_fail_updates.commitment_signed, true, true);
+	commitment_signed_dance!(nodes[0], nodes[1], htlc_fail_updates.commitment_signed, Some(FailureType::Downstream), true);
 	expect_payment_failed_with_update!(nodes[0], our_payment_hash, false, nodes[2].node.list_channels()[0].short_channel_id.unwrap(), true);
 
 	// Now disconnect nodes[1] from its peers and restart with accept_forwards_to_priv_channels set
@@ -441,7 +441,7 @@ fn test_inbound_scid_privacy() {
 	let payment_event = SendEvent::from_node(&nodes[0]);
 	assert_eq!(nodes[1].node.get_our_node_id(), payment_event.node_id);
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &payment_event.msgs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, true, true);
+	commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, Some(FailureType::Downstream), true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed_destinations!(
 		nodes[1].node.get_and_clear_pending_events(),
@@ -453,7 +453,7 @@ fn test_inbound_scid_privacy() {
 
 	let mut updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, false);
+	commitment_signed_dance!(nodes[0], nodes[1], updates.commitment_signed, None);
 
 	expect_payment_failed_conditions(&nodes[0], payment_hash_2, false,
 		PaymentFailedConditions::new().blamed_scid(last_hop[0].short_channel_id.unwrap())
@@ -501,7 +501,7 @@ fn test_scid_alias_returned() {
 	check_added_monitors!(nodes[0], 1);
 	let as_updates = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &as_updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], &as_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[1], nodes[0], &as_updates.commitment_signed, None, true);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCDestination::NextHopChannel { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan.0.channel_id }]);
@@ -509,7 +509,7 @@ fn test_scid_alias_returned() {
 
 	let bs_updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, None, true);
 
 	let err_data = 0u16.to_be_bytes();
 	expect_payment_failed_conditions(&nodes[0], payment_hash, false,
@@ -525,7 +525,7 @@ fn test_scid_alias_returned() {
 	check_added_monitors!(nodes[0], 1);
 	let as_updates = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &as_updates.update_add_htlcs[0]);
-	commitment_signed_dance!(nodes[1], nodes[0], &as_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[1], nodes[0], &as_updates.commitment_signed, None, true);
 
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed_destinations!(
@@ -536,7 +536,7 @@ fn test_scid_alias_returned() {
 
 	let bs_updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	nodes[0].node.handle_update_fail_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_fail_htlcs[0]);
-	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, false, true);
+	commitment_signed_dance!(nodes[0], nodes[1], bs_updates.commitment_signed, None, true);
 
 	let mut err_data = Vec::new();
 	err_data.extend_from_slice(&10_000u64.to_be_bytes());
@@ -725,7 +725,7 @@ fn test_0conf_channel_with_async_monitor() {
 
 	let bs_send = SendEvent::from_node(&nodes[1]);
 	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &bs_send.msgs[0]);
-	commitment_signed_dance!(nodes[2], nodes[1], bs_send.commitment_msg, false);
+	commitment_signed_dance!(nodes[2], nodes[1], bs_send.commitment_msg, None);
 	expect_pending_htlcs_forwardable!(nodes[2]);
 	expect_payment_claimable!(nodes[2], payment_hash, payment_secret, 1_000_000);
 	claim_payment(&nodes[0], &[&nodes[1], &nodes[2]], payment_preimage);

@@ -34,7 +34,7 @@ use bitcoin::{secp256k1, Sequence};
 #[cfg(splicing)]
 use bitcoin::{TxIn, Weight};
 
-use crate::events::FundingInfo;
+use crate::events::{FundingInfo, HTLCHandlingFailureReason};
 use crate::blinded_path::message::{AsyncPaymentsContext, MessageContext, OffersContext};
 use crate::blinded_path::NodeIdLookUp;
 use crate::blinded_path::message::{BlindedMessagePath, MessageForwardNode};
@@ -1209,6 +1209,14 @@ impl_writeable_tlv_based_enum!(EventCompletionAction,
 		(3, channel_id, (default_value, ChannelId::v1_from_funding_outpoint(channel_funding_outpoint.0.unwrap()))),
 	}
 );
+
+/// Holds information about a HTLC failure that will be surfaced on the API in
+/// `[Event::HTLCHandlingFailed]`. Differs from [`HTLCFailReason`], which is internally used
+/// to handle onion failures.
+struct HTLCFailureInfo {
+	destination: HTLCDestination,
+	failure_reason: Option<HTLCHandlingFailureReason>,
+}
 
 /// The source argument which is passed to [`ChannelManager::claim_mpp_part`].
 ///
@@ -3292,8 +3300,12 @@ macro_rules! handle_monitor_update_completion {
 		}
 		$self.finalize_claims(updates.finalized_claimed_htlcs);
 		for failure in updates.failed_htlcs.drain(..) {
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id };
-			$self.fail_htlc_backwards_internal(&failure.0, &failure.1, &failure.2, receiver);
+			let htlc_info = HTLCFailureInfo {
+				destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id },
+				// TODO: propagate reason through via `MonitorRestoreUpdates.failed_htlcs`.
+				failure_reason: None,
+			};
+			$self.fail_htlc_backwards_internal(&failure.0, &failure.1, &failure.2, htlc_info);
 		}
 	} }
 }
@@ -3911,8 +3923,11 @@ where
 
 		for htlc_source in failed_htlcs.drain(..) {
 			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(*counterparty_node_id), channel_id: *channel_id };
-			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, receiver);
+			let htlc_info = HTLCFailureInfo {
+				destination: HTLCDestination::NextHopChannel { node_id: Some(*counterparty_node_id), channel_id: *channel_id },
+				failure_reason: Some(HTLCHandlingFailureReason::ChannelClose),
+			};
+			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, htlc_info);
 		}
 
 		if let Some(shutdown_result) = shutdown_result {
@@ -4034,8 +4049,11 @@ where
 		for htlc_source in shutdown_res.dropped_outbound_htlcs.drain(..) {
 			let (source, payment_hash, counterparty_node_id, channel_id) = htlc_source;
 			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id };
-			self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
+			let failure_info = HTLCFailureInfo {
+				destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id },
+				failure_reason: Some(HTLCHandlingFailureReason::ChannelClose),
+			};
+			self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, failure_info);
 		}
 		if let Some((_, funding_txo, _channel_id, monitor_update)) = shutdown_res.monitor_update {
 			debug_assert!(false, "This should have been handled in `locked_close_channel`");
@@ -4329,22 +4347,25 @@ where
 
 	fn can_forward_htlc_to_outgoing_channel(
 		&self, chan: &mut FundedChannel<SP>, msg: &msgs::UpdateAddHTLC, next_packet: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), (&'static str, u16, HTLCHandlingFailureReason)> {
 		if !chan.context.should_announce() && !self.default_configuration.accept_forwards_to_priv_channels {
 			// Note that the behavior here should be identical to the above block - we
 			// should NOT reveal the existence or non-existence of a private channel if
 			// we don't allow forwards outbound over them.
-			return Err(("Refusing to forward to a private channel based on our config.", 0x4000 | 10));
+			return Err(("Refusing to forward to a private channel based on our config.", 0x4000 | 10,
+				HTLCHandlingFailureReason::PrivateChanelForward));
 		}
 		if let HopConnector::ShortChannelId(outgoing_scid) = next_packet.outgoing_connector {
 			if chan.context.get_channel_type().supports_scid_privacy() && outgoing_scid != chan.context.outbound_scid_alias() {
 				// `option_scid_alias` (referred to in LDK as `scid_privacy`) means
 				// "refuse to forward unless the SCID alias was used", so we pretend
 				// we don't have the channel here.
-				return Err(("Refusing to forward over real channel SCID as our counterparty requested.", 0x4000 | 10));
+				return Err(("Refusing to forward over real channel SCID as our counterparty requested.", 0x4000 | 10,
+					HTLCHandlingFailureReason::RealSCIDForward));
 			}
 		} else {
-			return Err(("Cannot forward by Node ID without SCID.", 0x4000 | 10));
+			return Err(("Cannot forward by Node ID without SCID.", 0x4000 | 10,
+				HTLCHandlingFailureReason::InvalidTrampoline));
 		}
 
 		// Note that we could technically not return an error yet here and just hope
@@ -4355,20 +4376,20 @@ where
 		if !chan.context.is_live() {
 			if !chan.context.is_enabled() {
 				// channel_disabled
-				return Err(("Forwarding channel has been disconnected for some time.", 0x1000 | 20));
+				return Err(("Forwarding channel has been disconnected for some time.", 0x1000 | 20,
+					HTLCHandlingFailureReason::ChannelOffline));
 			} else {
 				// temporary_channel_failure
-				return Err(("Forwarding channel is not in a ready state.", 0x1000 | 7));
+				return Err(("Forwarding channel is not in a ready state.", 0x1000 | 7,
+					HTLCHandlingFailureReason::ChannelNotReady));
 			}
 		}
 		if next_packet.outgoing_amt_msat < chan.context.get_counterparty_htlc_minimum_msat() { // amount_below_minimum
-			return Err(("HTLC amount was below the htlc_minimum_msat", 0x1000 | 11));
-		}
-		if let Err((err, code)) = chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value) {
-			return Err((err, code));
+			return Err(("HTLC amount was below the htlc_minimum_msat", 0x1000 | 11,
+				HTLCHandlingFailureReason::AmountBelowMinimum));
 		}
 
-		Ok(())
+		chan.htlc_satisfies_config(msg, next_packet.outgoing_amt_msat, next_packet.outgoing_cltv_value)
 	}
 
 	/// Executes a callback `C` that returns some value `X` on the channel found with the given
@@ -4395,11 +4416,12 @@ where
 
 	fn can_forward_htlc(
 		&self, msg: &msgs::UpdateAddHTLC, next_packet_details: &NextPacketDetails
-	) -> Result<(), (&'static str, u16)> {
+	) -> Result<(), (&'static str, u16, HTLCHandlingFailureReason)> {
 		let outgoing_scid = match next_packet_details.outgoing_connector {
 			HopConnector::ShortChannelId(scid) => scid,
 			HopConnector::Trampoline(_) => {
-				return Err(("Cannot forward by Node ID without SCID.", 0x4000 | 10));
+				return Err(("Cannot forward by Node ID without SCID.", 0x4000 | 10,
+					HTLCHandlingFailureReason::InvalidTrampoline));
 			}
 		};
 		match self.do_funded_channel_callback(outgoing_scid, |chan: &mut FundedChannel<SP>| {
@@ -4414,19 +4436,16 @@ where
 					fake_scid::is_valid_intercept(&self.fake_scid_rand_bytes, outgoing_scid, &self.chain_hash)) ||
 					fake_scid::is_valid_phantom(&self.fake_scid_rand_bytes, outgoing_scid, &self.chain_hash)
 				{} else {
-					return Err(("Don't have available channel for forwarding as requested.", 0x4000 | 10));
+					return Err(("Don't have available channel for forwarding as requested.", 0x4000 | 10,
+						HTLCHandlingFailureReason::InvalidTrampoline));
 				}
 			}
 		}
 
 		let cur_height = self.best_block.read().unwrap().height + 1;
-		if let Err((err_msg, err_code)) = check_incoming_htlc_cltv(
+		check_incoming_htlc_cltv(
 			cur_height, next_packet_details.outgoing_cltv_value, msg.cltv_expiry
-		) {
-			return Err((err_msg, err_code));
-		}
-
-		Ok(())
+		)
 	}
 
 	fn htlc_failure_from_update_add_err(
@@ -4697,7 +4716,8 @@ where
 								session_priv: session_priv.clone(),
 								first_hop_htlc_msat: htlc_msat,
 								payment_id,
-							}, onion_packet, None, &self.fee_estimator, &&logger);
+							}, onion_packet, None, &self.fee_estimator, &&logger)
+							.map_err(|(_, msg)| ChannelError::Ignore(msg));
 						match break_channel_entry!(self, peer_state, send_res, chan_entry) {
 							Some(monitor_update) => {
 								match handle_new_monitor_update!(self, funding_txo, monitor_update, peer_state_lock, peer_state, per_peer_state, chan) {
@@ -5753,8 +5773,11 @@ where
 			});
 
 			let failure_reason = HTLCFailReason::from_failure_code(0x4000 | 10);
-			let destination = HTLCDestination::UnknownNextHop { requested_forward_scid: short_channel_id };
-			self.fail_htlc_backwards_internal(&htlc_source, &payment.forward_info.payment_hash, &failure_reason, destination);
+			let failure_info = HTLCFailureInfo {
+				destination: HTLCDestination::UnknownNextHop { requested_forward_scid: short_channel_id },
+				failure_reason: Some(HTLCHandlingFailureReason::ManuallyFailed),
+			};
+			self.fail_htlc_backwards_internal(&htlc_source, &payment.forward_info.payment_hash, &failure_reason, failure_info);
 		} else { unreachable!() } // Only `PendingHTLCRouting::Forward`s are intercepted
 
 		Ok(())
@@ -5808,7 +5831,10 @@ where
 				) {
 					Ok(decoded_onion) => decoded_onion,
 					Err(htlc_fail) => {
-						htlc_fails.push((htlc_fail, HTLCDestination::InvalidOnion));
+						htlc_fails.push((htlc_fail, HTLCFailureInfo{
+							destination: HTLCDestination::InvalidOnion,
+							failure_reason: None, // Additional information isn't interesting.
+						}));
 						continue;
 					},
 				};
@@ -5830,13 +5856,16 @@ where
 					)
 				}) {
 					Some(Ok(_)) => {},
-					Some(Err((err, code))) => {
+					Some(Err((err, code, reason))) => {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
 							&update_add_htlc, &incoming_counterparty_node_id, err, code,
 							is_intro_node_blinded_forward, &shared_secret,
 						);
-						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						let htlc_info = HTLCFailureInfo {
+							destination: get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash),
+							failure_reason: Some(reason),
+						};
+						htlc_fails.push((htlc_fail, htlc_info));
 						continue;
 					},
 					// The incoming channel no longer exists, HTLCs should be resolved onchain instead.
@@ -5845,15 +5874,18 @@ where
 
 				// Now process the HTLC on the outgoing channel if it's a forward.
 				if let Some(next_packet_details) = next_packet_details_opt.as_ref() {
-					if let Err((err, code)) = self.can_forward_htlc(
+					if let Err((err, code, failure_reason)) = self.can_forward_htlc(
 						&update_add_htlc, next_packet_details
 					) {
 						let htlc_fail = self.htlc_failure_from_update_add_err(
 							&update_add_htlc, &incoming_counterparty_node_id, err, code,
 							is_intro_node_blinded_forward, &shared_secret,
 						);
-						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						let htlc_info = HTLCFailureInfo {
+							destination: get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash),
+							failure_reason: Some(failure_reason),
+						};
+						htlc_fails.push((htlc_fail, htlc_info));
 						continue;
 					}
 				}
@@ -5866,8 +5898,11 @@ where
 						htlc_forwards.push((htlc_forward, update_add_htlc.htlc_id));
 					},
 					PendingHTLCStatus::Fail(htlc_fail) => {
-						let htlc_destination = get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, htlc_destination));
+						let htlc_info = HTLCFailureInfo {
+							destination: get_failed_htlc_destination(outgoing_scid_opt, update_add_htlc.payment_hash),
+							failure_reason: None,
+						};
+						htlc_fails.push((htlc_fail, htlc_info));
 					},
 				}
 			}
@@ -5879,7 +5914,7 @@ where
 				incoming_channel_id, incoming_user_channel_id, htlc_forwards.drain(..).collect()
 			);
 			self.forward_htlcs_without_forward_event(&mut [pending_forwards]);
-			for (htlc_fail, htlc_destination) in htlc_fails.drain(..) {
+			for (htlc_fail, htlc_info) in htlc_fails.drain(..) {
 				let failure = match htlc_fail {
 					HTLCFailureMsg::Relay(fail_htlc) => HTLCForwardInfo::FailHTLC {
 						htlc_id: fail_htlc.htlc_id,
@@ -5894,7 +5929,8 @@ where
 				self.forward_htlcs.lock().unwrap().entry(incoming_scid).or_default().push(failure);
 				self.pending_events.lock().unwrap().push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: incoming_channel_id,
-					failed_next_destination: htlc_destination,
+					failed_next_destination: htlc_info.destination,
+					failure_reason: htlc_info.failure_reason,
 				}, None));
 			}
 		}
@@ -5949,10 +5985,13 @@ where
 													cltv_expiry,
 												});
 
-												let reason = if $next_hop_unknown {
-													HTLCDestination::UnknownNextHop { requested_forward_scid: short_chan_id }
-												} else {
-													HTLCDestination::FailedPayment{ payment_hash }
+												let reason = HTLCFailureInfo {
+													destination: if $next_hop_unknown {
+														HTLCDestination::UnknownNextHop { requested_forward_scid: short_chan_id }
+														} else {
+														HTLCDestination::FailedPayment{ payment_hash }
+													},
+													failure_reason: None,
 												};
 
 												failed_forwards.push((htlc_source, payment_hash,
@@ -6121,16 +6160,12 @@ where
 								};
 								log_trace!(logger, "Forwarding HTLC from SCID {} with payment_hash {} and next hop SCID {} over {} channel {} with corresponding peer {}",
 									prev_short_channel_id, &payment_hash, short_chan_id, channel_description, optimal_channel.context.channel_id(), &counterparty_node_id);
-								if let Err(e) = optimal_channel.queue_add_htlc(outgoing_amt_msat,
+								if let Err((failure, msg)) = optimal_channel.queue_add_htlc(outgoing_amt_msat,
 										payment_hash, outgoing_cltv_value, htlc_source.clone(),
 										onion_packet.clone(), skimmed_fee_msat, next_blinding_point, &self.fee_estimator,
 										&&logger)
 								{
-									if let ChannelError::Ignore(msg) = e {
-										log_trace!(logger, "Failed to forward HTLC with payment_hash {} to peer {}: {}", &payment_hash, &counterparty_node_id, msg);
-									} else {
-										panic!("Stated return value requirements in send_htlc() were not met");
-									}
+									log_trace!(logger, "Failed to forward HTLC with payment_hash {} to peer {}: {}", &payment_hash, &counterparty_node_id, msg);
 
 									if let Some(chan) = peer_state.channel_by_id
 										.get_mut(&forward_chan_id)
@@ -6140,7 +6175,10 @@ where
 										let data = self.get_htlc_inbound_temp_fail_data(failure_code);
 										failed_forwards.push((htlc_source, payment_hash,
 											HTLCFailReason::reason(failure_code, data),
-											HTLCDestination::NextHopChannel { node_id: Some(chan.context.get_counterparty_node_id()), channel_id: forward_chan_id }
+											HTLCFailureInfo {
+												destination: HTLCDestination::NextHopChannel { node_id: Some(chan.context.get_counterparty_node_id()), channel_id: forward_chan_id },
+												failure_reason: Some(failure),
+											},
 										));
 									} else {
 										forwarding_channel_not_found!(core::iter::once(forward_info).chain(draining_pending_forwards));
@@ -6294,7 +6332,10 @@ where
 												cltv_expiry: Some(cltv_expiry),
 											}), payment_hash,
 											HTLCFailReason::reason(0x4000 | 15, htlc_msat_height_data),
-											HTLCDestination::FailedPayment { payment_hash: $payment_hash },
+											HTLCFailureInfo {
+												destination: HTLCDestination::FailedPayment { payment_hash: $payment_hash },
+												failure_reason: None,
+											},
 										));
 										continue 'next_forwardable_htlc;
 									}
@@ -6851,8 +6892,11 @@ where
 			for htlc_source in timed_out_mpp_htlcs.drain(..) {
 				let source = HTLCSource::PreviousHopData(htlc_source.0.clone());
 				let reason = HTLCFailReason::from_failure_code(23);
-				let receiver = HTLCDestination::FailedPayment { payment_hash: htlc_source.1 };
-				self.fail_htlc_backwards_internal(&source, &htlc_source.1, &reason, receiver);
+				let failure_info = HTLCFailureInfo {
+					destination: HTLCDestination::FailedPayment { payment_hash: htlc_source.1 },
+					failure_reason: Some(HTLCHandlingFailureReason::MPPTimeout),
+				};
+				self.fail_htlc_backwards_internal(&source, &htlc_source.1, &reason, failure_info);
 			}
 
 			for (err, counterparty_node_id) in handle_errors.drain(..) {
@@ -6916,8 +6960,11 @@ where
 			for htlc in payment.htlcs {
 				let reason = self.get_htlc_fail_reason_from_failure_code(failure_code, &htlc);
 				let source = HTLCSource::PreviousHopData(htlc.prev_hop);
-				let receiver = HTLCDestination::FailedPayment { payment_hash: *payment_hash };
-				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
+				let htlc_info = HTLCFailureInfo {
+					destination: HTLCDestination::FailedPayment { payment_hash: *payment_hash },
+					failure_reason: Some(HTLCHandlingFailureReason::ManuallyFailed),
+				};
+				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, htlc_info);
 			}
 		}
 	}
@@ -6968,7 +7015,7 @@ where
 	// failed backwards or, if they were one of our outgoing HTLCs, then their failure needs to
 	// be surfaced to the user.
 	fn fail_holding_cell_htlcs(
-		&self, mut htlcs_to_fail: Vec<(HTLCSource, PaymentHash)>, channel_id: ChannelId,
+		&self, mut htlcs_to_fail: Vec<(HTLCSource, PaymentHash, HTLCHandlingFailureReason)>, channel_id: ChannelId,
 		counterparty_node_id: &PublicKey
 	) {
 		let (failure_code, onion_failure_data) = {
@@ -6993,21 +7040,24 @@ where
 			} else { (0x4000|10, Vec::new()) }
 		};
 
-		for (htlc_src, payment_hash) in htlcs_to_fail.drain(..) {
+		for (htlc_src, payment_hash, handling_failure) in htlcs_to_fail.drain(..) {
 			let reason = HTLCFailReason::reason(failure_code, onion_failure_data.clone());
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id.clone()), channel_id };
-			self.fail_htlc_backwards_internal(&htlc_src, &payment_hash, &reason, receiver);
+			let failure_info = HTLCFailureInfo {
+				destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id.clone()), channel_id },
+				failure_reason: Some(handling_failure),
+			};
+			self.fail_htlc_backwards_internal(&htlc_src, &payment_hash, &reason, failure_info);
 		}
 	}
 
-	fn fail_htlc_backwards_internal(&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason, destination: HTLCDestination) {
-		let push_forward_event = self.fail_htlc_backwards_internal_without_forward_event(source, payment_hash, onion_error, destination);
+	fn fail_htlc_backwards_internal(&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason, failure_info: HTLCFailureInfo) {
+		let push_forward_event = self.fail_htlc_backwards_internal_without_forward_event(source, payment_hash, onion_error, failure_info);
 		if push_forward_event { self.push_pending_forwards_ev(); }
 	}
 
 	/// Fails an HTLC backwards to the sender of it to us.
 	/// Note that we do not assume that channels corresponding to failed HTLCs are still available.
-	fn fail_htlc_backwards_internal_without_forward_event(&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason, destination: HTLCDestination) -> bool {
+	fn fail_htlc_backwards_internal_without_forward_event(&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason, failure_info: HTLCFailureInfo) -> bool {
 		// Ensure that no peer state channel storage lock is held when calling this function.
 		// This ensures that future code doesn't introduce a lock-order requirement for
 		// `forward_htlcs` to be locked after the `per_peer_state` peer locks, which calling
@@ -7079,7 +7129,8 @@ where
 				let mut pending_events = self.pending_events.lock().unwrap();
 				pending_events.push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: *channel_id,
-					failed_next_destination: destination,
+					failed_next_destination: failure_info.destination,
+					failure_reason: failure_info.failure_reason,
 				}, None));
 			},
 		}
@@ -7144,8 +7195,11 @@ where
 					for htlc in htlcs {
 						let reason = self.get_htlc_fail_reason_from_failure_code(FailureCode::InvalidOnionPayload(None), &htlc);
 						let source = HTLCSource::PreviousHopData(htlc.prev_hop);
-						let receiver = HTLCDestination::FailedPayment { payment_hash };
-						self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
+						let htlc_info = HTLCFailureInfo {
+							destination: HTLCDestination::FailedPayment { payment_hash },
+							failure_reason: None,
+						};
+						self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, htlc_info);
 					}
 					return;
 				}
@@ -7243,8 +7297,11 @@ where
 				htlc_msat_height_data.extend_from_slice(&self.best_block.read().unwrap().height.to_be_bytes());
 				let source = HTLCSource::PreviousHopData(htlc.prev_hop);
 				let reason = HTLCFailReason::reason(0x4000 | 15, htlc_msat_height_data);
-				let receiver = HTLCDestination::FailedPayment { payment_hash };
-				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
+				let htlc_info = HTLCFailureInfo {
+					destination: HTLCDestination::FailedPayment { payment_hash },
+					failure_reason: Some(HTLCHandlingFailureReason::MPPTimeout),
+				};
+				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, htlc_info);
 			}
 			self.claimable_payments.lock().unwrap().pending_claiming_payments.remove(&payment_hash);
 		}
@@ -8780,9 +8837,12 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 			}
 		}
 		for htlc_source in dropped_htlcs.drain(..) {
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id.clone()), channel_id: msg.channel_id };
+			let htlc_info = HTLCFailureInfo {
+				destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id.clone()), channel_id: msg.channel_id },
+				failure_reason: Some(HTLCHandlingFailureReason::ChannelClose),
+			};
 			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
-			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, receiver);
+			self.fail_htlc_backwards_internal(&htlc_source.0, &htlc_source.1, &reason, htlc_info);
 		}
 		if let Some(shutdown_res) = finish_shutdown {
 			self.finish_close_channel(shutdown_res);
@@ -9123,7 +9183,10 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 
 										failed_intercept_forwards.push((htlc_source, forward_info.payment_hash,
 												HTLCFailReason::from_failure_code(0x4000 | 10),
-												HTLCDestination::InvalidForward { requested_forward_scid: scid },
+												HTLCFailureInfo {
+													destination: HTLCDestination::InvalidForward { requested_forward_scid: scid },
+													failure_reason: Some(HTLCHandlingFailureReason::DuplicateIntercept),
+												},
 										));
 									}
 								}
@@ -9606,9 +9669,12 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 							);
 						} else {
 							log_trace!(logger, "Failing HTLC with hash {} from our monitor", &htlc_update.payment_hash);
-							let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id };
+							let htlc_info = HTLCFailureInfo {
+								destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id },
+								failure_reason: Some(HTLCHandlingFailureReason::ChannelClose),
+							};
 							let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
-							self.fail_htlc_backwards_internal(&htlc_update.source, &htlc_update.payment_hash, &reason, receiver);
+							self.fail_htlc_backwards_internal(&htlc_update.source, &htlc_update.payment_hash, &reason, htlc_info);
 						}
 					},
 					MonitorEvent::HolderForceClosed(_) | MonitorEvent::HolderForceClosedWithInfo { .. } => {
@@ -11700,7 +11766,10 @@ where
 									let failure_code = 0x1000|14; /* expiry_too_soon */
 									let data = self.get_htlc_inbound_temp_fail_data(failure_code);
 									timed_out_htlcs.push((source, payment_hash, HTLCFailReason::reason(failure_code, data),
-										HTLCDestination::NextHopChannel { node_id: Some(funded_channel.context.get_counterparty_node_id()), channel_id: funded_channel.context.channel_id() }));
+										HTLCFailureInfo{
+											destination: HTLCDestination::NextHopChannel { node_id: Some(funded_channel.context.get_counterparty_node_id()), channel_id: funded_channel.context.channel_id() },
+											failure_reason: Some(HTLCHandlingFailureReason::ExpiryTooSoon),
+										}));
 								}
 								let logger = WithChannelContext::from(&self.logger, &funded_channel.context, None);
 								if let Some(channel_ready) = channel_ready_opt {
@@ -11824,7 +11893,10 @@ where
 
 						timed_out_htlcs.push((HTLCSource::PreviousHopData(htlc.prev_hop.clone()), payment_hash.clone(),
 							HTLCFailReason::reason(0x4000 | 15, htlc_msat_height_data),
-							HTLCDestination::FailedPayment { payment_hash: payment_hash.clone() }));
+							HTLCFailureInfo {
+								destination: HTLCDestination::FailedPayment { payment_hash: payment_hash.clone() },
+								failure_reason: Some(HTLCHandlingFailureReason::ExpiryTimeoutBuffer),
+							}));
 						false
 					} else { true }
 				});
@@ -11853,7 +11925,10 @@ where
 					};
 					timed_out_htlcs.push((prev_hop_data, htlc.forward_info.payment_hash,
 							HTLCFailReason::from_failure_code(0x2000 | 2),
-							HTLCDestination::InvalidForward { requested_forward_scid }));
+							HTLCFailureInfo {
+								destination: HTLCDestination::InvalidForward { requested_forward_scid },
+								failure_reason: Some(HTLCHandlingFailureReason::ExpiryTimeoutBuffer),
+							}));
 					let logger = WithContext::from(
 						&self.logger, None, Some(htlc.prev_channel_id), Some(htlc.forward_info.payment_hash)
 					);
@@ -14926,9 +15001,12 @@ where
 
 		for htlc_source in failed_htlcs.drain(..) {
 			let (source, payment_hash, counterparty_node_id, channel_id) = htlc_source;
-			let receiver = HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id };
+			let htlc_info = HTLCFailureInfo{
+				destination: HTLCDestination::NextHopChannel { node_id: Some(counterparty_node_id), channel_id },
+				failure_reason: Some(HTLCHandlingFailureReason::ChannelClose),
+			};
 			let reason = HTLCFailReason::from_failure_code(0x4000 | 8);
-			channel_manager.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
+			channel_manager.fail_htlc_backwards_internal(&source, &payment_hash, &reason, htlc_info);
 		}
 
 		for (source, preimage, downstream_value, downstream_closed, downstream_node_id, downstream_funding, downstream_channel_id) in pending_claims_to_replay {

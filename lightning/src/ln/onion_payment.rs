@@ -13,6 +13,7 @@ use bitcoin::secp256k1::ecdh::SharedSecret;
 use crate::blinded_path;
 use crate::blinded_path::payment::{PaymentConstraints, PaymentRelay};
 use crate::chain::channelmonitor::{HTLC_FAIL_BACK_BUFFER, LATENCY_GRACE_PERIOD_BLOCKS};
+use crate::events::HTLCHandlingFailureReason;
 use crate::types::payment::PaymentHash;
 use crate::ln::channelmanager::{BlindedFailure, BlindedForward, CLTV_FAR_FAR_AWAY, HTLCFailureMsg, MIN_CLTV_EXPIRY_DELTA, PendingHTLCInfo, PendingHTLCRouting};
 use crate::types::features::BlindedHopFeatures;
@@ -427,7 +428,7 @@ where
 				}),
 			};
 
-			if let Err((err_msg, code)) = check_incoming_htlc_cltv(
+			if let Err((err_msg, code, _)) = check_incoming_htlc_cltv(
 				cur_height, outgoing_cltv_value, msg.cltv_expiry,
 			) {
 				return Err(InboundHTLCErr {
@@ -579,21 +580,23 @@ where
 
 pub(super) fn check_incoming_htlc_cltv(
 	cur_height: u32, outgoing_cltv_value: u32, cltv_expiry: u32
-) -> Result<(), (&'static str, u16)> {
+) -> Result<(), (&'static str, u16, HTLCHandlingFailureReason)> {
 	if (cltv_expiry as u64) < (outgoing_cltv_value) as u64 + MIN_CLTV_EXPIRY_DELTA as u64 {
 		return Err((
 			"Forwarding node has tampered with the intended HTLC values or origin node has an obsolete cltv_expiry_delta",
 			0x1000 | 13, // incorrect_cltv_expiry
+			HTLCHandlingFailureReason::IncorrectCLTVExpiry,
+
 		));
 	}
 	// Theoretically, channel counterparty shouldn't send us a HTLC expiring now,
 	// but we want to be robust wrt to counterparty packet sanitization (see
 	// HTLC_FAIL_BACK_BUFFER rationale).
 	if cltv_expiry <= cur_height + HTLC_FAIL_BACK_BUFFER as u32 { // expiry_too_soon
-		return Err(("CLTV expiry is too close", 0x1000 | 14));
+		return Err(("CLTV expiry is too close", 0x1000 | 14, HTLCHandlingFailureReason::ExpiryTooSoon));
 	}
 	if cltv_expiry > cur_height + CLTV_FAR_FAR_AWAY as u32 { // expiry_too_far
-		return Err(("CLTV expiry is too far in the future", 21));
+		return Err(("CLTV expiry is too far in the future", 21, HTLCHandlingFailureReason::ExpiryTooFar));
 	}
 	// If the HTLC expires ~now, don't bother trying to forward it to our
 	// counterparty. They should fail it anyway, but we don't want to bother with
@@ -604,7 +607,7 @@ pub(super) fn check_incoming_htlc_cltv(
 	// but there is no need to do that, and since we're a bit conservative with our
 	// risk threshold it just results in failing to forward payments.
 	if (outgoing_cltv_value) as u64 <= (cur_height + LATENCY_GRACE_PERIOD_BLOCKS) as u64 {
-		return Err(("Outgoing CLTV value is too soon", 0x1000 | 14));
+		return Err(("Outgoing CLTV value is too soon", 0x1000 | 14, HTLCHandlingFailureReason::ExpiryTimeoutBuffer));
 	}
 
 	Ok(())

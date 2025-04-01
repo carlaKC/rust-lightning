@@ -1573,6 +1573,11 @@ impl LocalHTLCFailureReason {
 	pub(super) fn is_permanent(&self) -> bool {
 		self.failure_code() & PERM == PERM
 	}
+
+	/// Returns true if the error is related to the onion.
+	pub fn is_onion(&self) -> bool {
+		self.failure_code() & BADONION == BADONION
+	}
 }
 
 impl Into<LocalHTLCFailureReason> for u16 {

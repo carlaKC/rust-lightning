@@ -24,7 +24,7 @@ use crate::chain::transaction;
 use crate::ln::channelmanager::{InterceptId, PaymentId, RecipientOnionFields};
 use crate::ln::channel::FUNDING_CONF_DEADLINE_BLOCKS;
 use crate::types::features::ChannelTypeFeatures;
-use crate::ln::msgs;
+use crate::ln::{msgs, LocalHTLCFailureReason};
 use crate::ln::types::ChannelId;
 use crate::types::payment::{PaymentPreimage, PaymentHash, PaymentSecret};
 use crate::offers::invoice::Bolt12Invoice;
@@ -523,6 +523,85 @@ impl_writeable_tlv_based_enum_upgradable!(HTLCDestination,
 		(0, payment_hash, required),
 	},
 );
+
+/// Failure information for [`Event::HTLCHandlingFailed`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HTLCHandlingFailureDetails {
+	/// The type of HTLC that was being handled.
+	pub htlc_type: HTLCHandlingType,
+	/// The reason that the htlc was failed.
+	pub reason: HTLCHandlingFailedReason,
+}
+
+/*impl_writeable_tlv_based!(HTLCHandlingFailureDetails, {
+	(0, htlc_type, required),
+	(2, reason, required),
+});*/
+
+/// The different ways that a HTLC processed by our node may be handled.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HTLCHandlingType {
+	/// The HTLC was intended to be forwarded on one of our outgoing channels.
+	Forward {
+		/// The `node_id` of the next node. For backwards compatibility, this field is
+		/// marked as optional, versions prior to 0.0.110 may not always be able to provide
+		/// counterparty node information.
+		node_id: Option<PublicKey>,
+		/// The outgoing `channel_id` between us and the next node.
+		channel_id: ChannelId,
+	},
+	/// The HTLC was intended to pay our node.
+	Receive {
+		/// The payment hash of the payment we attempted to process.
+		payment_hash: PaymentHash,
+	},
+	/// The HTLC was an intercept on our node.
+	Intercept {
+		/// The channel id requested that serves and the id for intercepted htlcs.
+		intercept_id: u64,
+	},
+	/// The HTLC could not be handled because it was invalid.
+	Invalid,
+}
+
+impl_writeable_tlv_based_enum!(HTLCHandlingType,
+	(0, Forward) => {
+		(0, node_id, required),
+		(2, channel_id, required),
+	},
+	(1, Receive) => {
+		(0, payment_hash, required),
+	},
+	(2, Intercept) => {
+		(0, intercept_id, required),
+	},
+	(3, Invalid) => {},
+);
+
+/// The reason for HTLC failures in [`HTLCHandlingFailureDetails`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HTLCHandlingFailedReason {
+	/// The forwarded HTLC was failed back by the downstream node with an encrypted error reason.
+	Downstream,
+	/// The HTLC was failed locally by our node.
+	Local {
+		/// The reason that our node chose to fail the HTLC.
+		reason: LocalHTLCFailureReason,
+	},
+}
+
+impl_writeable_tlv_based_enum!(HTLCHandlingFailedReason,
+	(0, Downstream) => {},
+	(1, Local) => {
+		(0, reason, required),
+	},
+);
+
+impl Into<HTLCHandlingFailedReason> for LocalHTLCFailureReason {
+	fn into(self) -> HTLCHandlingFailedReason {
+		HTLCHandlingFailedReason::Local { reason: self }
+	}
+}
 
 /// Will be used in [`Event::HTLCIntercepted`] to identify the next hop in the HTLC's path.
 /// Currently only used in serialization for the sake of maintaining compatibility. More variants
@@ -1448,7 +1527,17 @@ pub enum Event {
 		/// The channel over which the HTLC was received.
 		prev_channel_id: ChannelId,
 		/// Destination of the HTLC that failed to be processed.
-		failed_next_destination: HTLCDestination,
+
+		/// The reason that the htlc failed.
+		///
+		/// This field will be `None` only for objects serialized prior to LDK 0.2.0.
+		htlc_type: HTLCHandlingType,
+
+		/// The reason that the htlc failed.
+		///
+		/// This field will be `None` only for objects serialized prior to LDK 0.2.0. Some values
+		/// will be inferred from [`HTLCDestination`] where applicable.
+		reason: Option<HTLCHandlingFailedReason>,
 	},
 	/// Indicates that a transaction originating from LDK needs to have its fee bumped. This event
 	/// requires confirmed external funds to be readily available to spend.
@@ -1752,11 +1841,49 @@ impl Writeable for Event {
 					(8, path.blinded_tail, option),
 				})
 			},
-			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failed_next_destination } => {
+			&Event::HTLCHandlingFailed { ref prev_channel_id, ref htlc_type, ref reason } => {
 				25u8.write(writer)?;
+
+				// Map new fields to legacy [`HTLCDestination`] value to allow downgrading.
+				let failed_next_destination = match htlc_type {
+					HTLCHandlingType::Forward { node_id, channel_id } => {
+						HTLCDestination::NextHopChannel {
+							node_id: *node_id,
+							channel_id: *channel_id,
+						}
+					},
+					HTLCHandlingType::Receive { payment_hash } => {
+						HTLCDestination::FailedPayment { payment_hash: *payment_hash }
+					},
+					HTLCHandlingType::Intercept { intercept_id } => {
+						HTLCDestination::InvalidForward { requested_forward_scid: *intercept_id }
+					},
+					HTLCHandlingType::Invalid => {
+						let reason = reason.clone().unwrap(); // TODO: if htlc_type is set, reason always is!
+						match reason {
+							HTLCHandlingFailedReason::Downstream => HTLCDestination::NextHopChannel { node_id: None, channel_id: ChannelId::new_zero() }, // TODO: need value from event?
+							HTLCHandlingFailedReason::Local{ reason } => {
+								if reason.is_onion() {
+									HTLCDestination::InvalidOnion
+								} else if reason == LocalHTLCFailureReason::UnknownNextPeer {
+									// TODO: would need to fix scid here (store with unknown peer?)
+									HTLCDestination::UnknownNextHop { requested_forward_scid: 0 }
+								} else {
+									HTLCDestination::InvalidForward { requested_forward_scid: 0 }
+								}
+							}
+						}
+
+					},
+				};
+
+				// The htlc_type and reason fields are optional because they haven't always
+				// been present (if they were required, reads would fail).
 				write_tlv_fields!(writer, {
 					(0, prev_channel_id, required),
+					(1, Some(htlc_type.clone()), option),
 					(2, failed_next_destination, required),
+					(3, reason.clone(), option),
 				})
 			},
 			&Event::BumpTransaction(ref event)=> {
@@ -2201,14 +2328,43 @@ impl MaybeReadable for Event {
 			25u8 => {
 				let mut f = || {
 					let mut prev_channel_id = ChannelId::new_zero();
-					let mut failed_next_destination_opt = UpgradableRequired(None);
+					let mut htlc_type_option = None;
+					let mut failed_next_destination_opt: UpgradableRequired<HTLCDestination> =
+						UpgradableRequired(None);
+					let mut reason = None;
+
+					// Read htlc_type and reason out as optional, as they may not have been written
+					// by older versions.
 					read_tlv_fields!(reader, {
 						(0, prev_channel_id, required),
+						(1, htlc_type_option, option),
 						(2, failed_next_destination_opt, upgradable_required),
+						(3, reason, option),
 					});
+
+					// If no htlc type is present, "upgrade" the htlc destination field which is
+					// always written for backwards compatibility. We can always promise that we'll
+					// yield a htlc_type here, because the legacy field maps to new information.
+					// We can sometimes infer a reason from the destination (as it contained some
+					// variants that are actually error causes), but the failure reason is in most
+					// cases additional information that will not be available for legacy events.
+					let (required_htlc_type, reason) = htlc_type_option.unwrap_or(
+						{
+						debug_assert!(reason.is_none()); // If type is none, reason will be none.
+						match failed_next_destination_opt.0.unwrap() {
+							HTLCDestination::NextHopChannel { node_id, channel_id } => ( HTLCHandlingType::Forward { node_id, channel_id }, None),
+							HTLCDestination::UnknownNextHop { .. } => ( HTLCHandlingType::Invalid, Some(LocalHTLCFailureReason::UnknownNextPeer.into()) ),
+							HTLCDestination::InvalidForward { .. } => ( HTLCHandlingType::Invalid, None ),
+							HTLCDestination::InvalidOnion => ( HTLCHandlingType::Invalid, Some(LocalHTLCFailureReason::InvalidOnionPayload.into()) ),
+							HTLCDestination::FailedPayment { payment_hash } => ( HTLCHandlingType::Receive { payment_hash }, None)
+						}
+						}
+					);
+
 					Ok(Some(Event::HTLCHandlingFailed {
 						prev_channel_id,
-						failed_next_destination: _init_tlv_based_struct_field!(failed_next_destination_opt, upgradable_required),
+						htlc_type: required_htlc_type,
+						reason,
 					}))
 				};
 				f()

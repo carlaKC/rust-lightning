@@ -5756,7 +5756,7 @@ where
 					},
 				}
 			} else {
-				HTLCHandlingType::FailedPayment { payment_hash }
+				HTLCHandlingType::ReceiveFailed { payment_hash }
 			}
 		};
 
@@ -5929,7 +5929,7 @@ where
 												let reason = if $next_hop_unknown {
 													HTLCHandlingType::UnknownNextHop { requested_forward_scid: short_chan_id }
 												} else {
-													HTLCHandlingType::FailedPayment{ payment_hash }
+													HTLCHandlingType::ReceiveFailed{ payment_hash }
 												};
 
 												failed_forwards.push((htlc_source, payment_hash,
@@ -6268,7 +6268,7 @@ where
 												cltv_expiry: Some(cltv_expiry),
 											}), payment_hash,
 											HTLCFailReason::reason(LocalHTLCFailureReason::IncorrectPaymentDetails, htlc_msat_height_data),
-											HTLCHandlingType::FailedPayment { payment_hash: $payment_hash },
+											HTLCHandlingType::ReceiveFailed { payment_hash: $payment_hash },
 										));
 										continue 'next_forwardable_htlc;
 									}
@@ -6826,7 +6826,7 @@ where
 				let source = HTLCSource::PreviousHopData(htlc_source.0.clone());
 				let failure_reason = LocalHTLCFailureReason::MPPTimeout;
 				let reason = HTLCFailReason::from_failure_code(failure_reason);
-				let receiver = HTLCHandlingType::FailedPayment { payment_hash: htlc_source.1 };
+				let receiver = HTLCHandlingType::ReceiveFailed { payment_hash: htlc_source.1 };
 				self.fail_htlc_backwards_internal(&source, &htlc_source.1, &reason, receiver);
 			}
 
@@ -6891,7 +6891,7 @@ where
 			for htlc in payment.htlcs {
 				let reason = self.get_htlc_fail_reason_from_failure_code(failure_code, &htlc);
 				let source = HTLCSource::PreviousHopData(htlc.prev_hop);
-				let receiver = HTLCHandlingType::FailedPayment { payment_hash: *payment_hash };
+				let receiver = HTLCHandlingType::ReceiveFailed { payment_hash: *payment_hash };
 				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
 			}
 		}
@@ -7119,7 +7119,7 @@ where
 					for htlc in htlcs {
 						let reason = self.get_htlc_fail_reason_from_failure_code(FailureCode::InvalidOnionPayload(None), &htlc);
 						let source = HTLCSource::PreviousHopData(htlc.prev_hop);
-						let receiver = HTLCHandlingType::FailedPayment { payment_hash };
+						let receiver = HTLCHandlingType::ReceiveFailed { payment_hash };
 						self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
 					}
 					return;
@@ -7218,7 +7218,7 @@ where
 				htlc_msat_height_data.extend_from_slice(&self.best_block.read().unwrap().height.to_be_bytes());
 				let source = HTLCSource::PreviousHopData(htlc.prev_hop);
 				let reason = HTLCFailReason::reason(LocalHTLCFailureReason::IncorrectPaymentDetails, htlc_msat_height_data);
-				let receiver = HTLCHandlingType::FailedPayment { payment_hash };
+				let receiver = HTLCHandlingType::ReceiveFailed { payment_hash };
 				self.fail_htlc_backwards_internal(&source, &payment_hash, &reason, receiver);
 			}
 			self.claimable_payments.lock().unwrap().pending_claiming_payments.remove(&payment_hash);
@@ -11799,7 +11799,7 @@ where
 						let reason = LocalHTLCFailureReason::PaymentClaimBuffer;
 						timed_out_htlcs.push((HTLCSource::PreviousHopData(htlc.prev_hop.clone()), payment_hash.clone(),
 							HTLCFailReason::reason(reason, htlc_msat_height_data),
-							HTLCHandlingType::FailedPayment { payment_hash: payment_hash.clone() }));
+							HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash.clone() }));
 						false
 					} else { true }
 				});
@@ -15037,7 +15037,7 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::FailedPayment { payment_hash: our_payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash: our_payment_hash }]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15218,7 +15218,7 @@ mod tests {
 		// We have to forward pending HTLCs twice - once tries to forward the payment forward (and
 		// fails), the second will process the resulting failure and fail the HTLC backward
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::FailedPayment { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15263,7 +15263,7 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::FailedPayment { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15310,7 +15310,7 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::FailedPayment { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15367,7 +15367,7 @@ mod tests {
 		nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &updates.update_add_htlcs[0]);
 		commitment_signed_dance!(nodes[1], nodes[0], &updates.commitment_signed, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::FailedPayment { payment_hash: mismatch_payment_hash }]);
+		expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash: mismatch_payment_hash }]);
 		check_added_monitors(&nodes[1], 1);
 		let _ = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 

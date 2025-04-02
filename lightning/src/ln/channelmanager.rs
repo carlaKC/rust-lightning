@@ -5786,8 +5786,8 @@ where
 					&update_add_htlc, &*self.node_signer, &*self.logger, &self.secp_ctx
 				) {
 					Ok(decoded_onion) => decoded_onion,
-					Err((htlc_fail, _)) => {
-						htlc_fails.push((htlc_fail, HTLCHandlingType::InvalidOnion));
+					Err((htlc_fail, reason)) => {
+						htlc_fails.push((htlc_fail, HTLCHandlingType::InvalidOnion, reason.into()));
 						continue;
 					},
 				};
@@ -5815,7 +5815,7 @@ where
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let handling_type = get_failed_htlc_type(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, handling_type));
+						htlc_fails.push((htlc_fail, handling_type, reason.into()));
 						continue;
 					},
 					// The incoming channel no longer exists, HTLCs should be resolved onchain instead.
@@ -5832,7 +5832,7 @@ where
 							is_intro_node_blinded_forward, &shared_secret,
 						);
 						let handling_type = get_failed_htlc_type(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, handling_type));
+						htlc_fails.push((htlc_fail, handling_type, reason.into()));
 						continue;
 					}
 				}
@@ -5844,7 +5844,9 @@ where
 					Ok(info) => htlc_forwards.push((info, update_add_htlc.htlc_id)),
 					Err(inbound_err) => {
 						let handling_type = get_failed_htlc_type(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((self.construct_pending_htlc_fail_msg(&update_add_htlc, &incoming_counterparty_node_id, shared_secret, inbound_err), handling_type));
+						let htlc_failure = inbound_err.reason.into();
+						htlc_fails.push((self.construct_pending_htlc_fail_msg(&update_add_htlc, &incoming_counterparty_node_id,
+							shared_secret, inbound_err), handling_type, htlc_failure));
 					},
 				}
 			}
@@ -5856,7 +5858,7 @@ where
 				incoming_channel_id, incoming_user_channel_id, htlc_forwards.drain(..).collect()
 			);
 			self.forward_htlcs_without_forward_event(&mut [pending_forwards]);
-			for (htlc_fail, handling_type) in htlc_fails.drain(..) {
+			for (htlc_fail, handling_type, handling_failure) in htlc_fails.drain(..) {
 				let failure = match htlc_fail {
 					HTLCFailureMsg::Relay(fail_htlc) => HTLCForwardInfo::FailHTLC {
 						htlc_id: fail_htlc.htlc_id,
@@ -5872,6 +5874,7 @@ where
 				self.pending_events.lock().unwrap().push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: incoming_channel_id,
 					handling_type,
+					handling_failure: Some(handling_failure),
 				}, None));
 			}
 		}
@@ -7055,6 +7058,7 @@ where
 				pending_events.push_back((events::Event::HTLCHandlingFailed {
 					prev_channel_id: *channel_id,
 					handling_type,
+					handling_failure: Some(onion_error.into()),
 				}, None));
 			},
 		}

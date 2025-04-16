@@ -114,7 +114,7 @@ fn run_onion_failure_test_with_fail_intercept<F1,F2,F3>(
 	let update_1_0 = match test_case {
 		0|100 => { // intermediate node failure; fail backward to 0
 			expect_pending_htlcs_forwardable!(nodes[1]);
-			expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[expected_htlc_type.clone().unwrap()]);
+			expect_htlc_handling_failed!(nodes[1].node.get_and_clear_pending_events(), &[expected_htlc_type.clone().unwrap()]);
 			check_added_monitors(&nodes[1], 1);
 			let update_1_0 = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 			assert!(update_1_0.update_fail_htlcs.len()+update_1_0.update_fail_malformed_htlcs.len()==1 && (update_1_0.update_fail_htlcs.len()==1 || update_1_0.update_fail_malformed_htlcs.len()==1));
@@ -148,7 +148,7 @@ fn run_onion_failure_test_with_fail_intercept<F1,F2,F3>(
 				expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash.clone() }]);
 			} else if test_case == 1 || test_case == 3 {
 				expect_htlc_forward!(&nodes[2]);
-				expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), vec![expected_htlc_type.clone().unwrap()]);
+				expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), vec![expected_htlc_type.clone().unwrap()]);
 			}
 			check_added_monitors!(&nodes[2], 1);
 
@@ -1749,7 +1749,7 @@ fn test_phantom_failure_modified_cltv() {
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &update_add);
 	commitment_signed_dance!(nodes[1], nodes[0], &update_0.commitment_signed, false, true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		nodes[1].node.get_and_clear_pending_events(),
 		&[HTLCHandlingType::InvalidForward { requested_forward_scid: phantom_scid }]
 	);
@@ -1798,7 +1798,7 @@ fn test_phantom_failure_expires_too_soon() {
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &update_add);
 	commitment_signed_dance!(nodes[1], nodes[0], &update_0.commitment_signed, false, true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		nodes[1].node.get_and_clear_pending_events(),
 		&[HTLCHandlingType::InvalidForward { requested_forward_scid: phantom_scid }]
 	);
@@ -1903,7 +1903,7 @@ fn do_test_phantom_dust_exposure_failure(multiplier_dust_limit: bool) {
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &update_add);
 	commitment_signed_dance!(nodes[1], nodes[0], &update_0.commitment_signed, false, true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		nodes[1].node.get_and_clear_pending_events(),
 		&[HTLCHandlingType::InvalidForward { requested_forward_scid: phantom_scid }]
 	);

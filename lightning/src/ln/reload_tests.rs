@@ -1324,7 +1324,7 @@ fn test_htlc_localremoved_persistence() {
 	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &updates.update_add_htlcs[0]);
 	commitment_signed_dance!(nodes[1], nodes[0], &updates.commitment_signed, false);
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash: mismatch_payment_hash }]);
+	expect_htlc_handling_failed!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash: mismatch_payment_hash }]);
 	check_added_monitors(&nodes[1], 1);
 
 	// Save the update_fail_htlc message for later comparison.

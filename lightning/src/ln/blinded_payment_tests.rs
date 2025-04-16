@@ -430,7 +430,7 @@ fn do_forward_checks_failure(check: ForwardCheckFail, intro_fails: bool) {
 			ForwardCheckFail::OutboundChannelCheck =>
 				HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2 },
 		};
-		expect_htlc_handling_failed_destinations!(
+		expect_htlc_handling_failed!(
 			nodes[1].node.get_and_clear_pending_events(), &[failed_destination.clone()]
 		);
 		match check {
@@ -461,7 +461,7 @@ fn do_forward_checks_failure(check: ForwardCheckFail, intro_fails: bool) {
 		ForwardCheckFail::OutboundChannelCheck =>
 			HTLCHandlingType::ForwardFailed { node_id: Some(nodes[3].node.get_our_node_id()), channel_id: chan_2_3.2 },
 	};
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		nodes[2].node.get_and_clear_pending_events(), &[failed_destination.clone()]
 	);
 	check_added_monitors!(nodes[2], 1);
@@ -527,7 +527,7 @@ fn failed_backwards_to_intro_node() {
 	do_commitment_signed_dance(&nodes[2], &nodes[1], &payment_event.commitment_msg, true, true);
 
 	expect_pending_htlcs_forwardable!(nodes[2]);
-	expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
+	expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
 	check_added_monitors(&nodes[2], 1);
 
 	let mut updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
@@ -605,7 +605,7 @@ fn do_forward_fail_in_process_pending_htlc_fwds(check: ProcessPendingHTLCsCheck,
 					// intro node will error backwards.
 					$curr_node.node.peer_disconnected($next_node.node.get_our_node_id());
 					expect_pending_htlcs_forwardable!($curr_node);
-					expect_htlc_handling_failed_destinations!($curr_node.node.get_and_clear_pending_events(),
+					expect_htlc_handling_failed!($curr_node.node.get_and_clear_pending_events(),
 						vec![HTLCHandlingType::ForwardFailed { node_id: Some($next_node.node.get_our_node_id()), channel_id: $failed_chan_id }]);
 				},
 				ProcessPendingHTLCsCheck::FwdChannelClosed => {
@@ -625,7 +625,7 @@ fn do_forward_fail_in_process_pending_htlc_fwds(check: ProcessPendingHTLCsCheck,
 					check_added_monitors!($curr_node, 1);
 
 					$curr_node.node.process_pending_htlc_forwards();
-					expect_htlc_handling_failed_destinations!($curr_node.node.get_and_clear_pending_events(),
+					expect_htlc_handling_failed!($curr_node.node.get_and_clear_pending_events(),
 						vec![HTLCHandlingType::InvalidForward { requested_forward_scid: $failed_scid }]);
 					$curr_node.node.process_pending_htlc_forwards();
 				},
@@ -988,7 +988,7 @@ fn do_multi_hop_receiver_fail(check: ReceiveCheckFail) {
 			check_added_monitors!(nodes[2], 0);
 			do_commitment_signed_dance(&nodes[2], &nodes[1], &payment_event_1_2.commitment_msg, true, true);
 			expect_pending_htlcs_forwardable!(nodes[2]);
-			expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
+			expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
 			check_added_monitors(&nodes[2], 1);
 		},
 		ReceiveCheckFail::ReceiveRequirements => {
@@ -998,7 +998,7 @@ fn do_multi_hop_receiver_fail(check: ReceiveCheckFail) {
 			check_added_monitors!(nodes[2], 0);
 			do_commitment_signed_dance(&nodes[2], &nodes[1], &payment_event_1_2.commitment_msg, true, true);
 			expect_pending_htlcs_forwardable!(nodes[2]);
-			expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
+			expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
 			check_added_monitors(&nodes[2], 1);
 		},
 		ReceiveCheckFail::ChannelCheck => {
@@ -1014,7 +1014,7 @@ fn do_multi_hop_receiver_fail(check: ReceiveCheckFail) {
 			nodes[2].node.handle_shutdown(nodes[1].node.get_our_node_id(), &node_1_shutdown);
 			commitment_signed_dance!(nodes[2], nodes[1], (), false, true, false, false);
 			expect_pending_htlcs_forwardable!(nodes[2]);
-			expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
+			expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
 			check_added_monitors(&nodes[2], 1);
 		},
 		ReceiveCheckFail::ProcessPendingHTLCsCheck => {
@@ -1032,7 +1032,7 @@ fn do_multi_hop_receiver_fail(check: ReceiveCheckFail) {
 			check_added_monitors!(nodes[2], 0);
 			do_commitment_signed_dance(&nodes[2], &nodes[1], &payment_event_1_2.commitment_msg, true, true);
 			expect_pending_htlcs_forwardable!(nodes[2]);
-			expect_htlc_handling_failed_destinations!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
+			expect_htlc_handling_failed!(nodes[2].node.get_and_clear_pending_events(), &[HTLCHandlingType::ReceiveFailed { payment_hash }]);
 			check_added_monitors(&nodes[2], 1);
 		}
 	}
@@ -1241,7 +1241,7 @@ fn min_htlc() {
 	check_added_monitors!(nodes[1], 0);
 	do_commitment_signed_dance(&nodes[1], &nodes[0], &payment_event_0_1.commitment_msg, true, true);
 	expect_pending_htlcs_forwardable!(nodes[1]);
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		nodes[1].node.get_and_clear_pending_events(),
 		&[HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_1_2.2 }]
 	);
@@ -1436,7 +1436,7 @@ fn fails_receive_tlvs_authentication() {
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	nodes[1].node.process_pending_htlc_forwards();
 	check_added_monitors!(nodes[1], 1);
-	expect_htlc_handling_failed_destinations!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
+	expect_htlc_handling_failed!(nodes[1].node.get_and_clear_pending_events(), &[HTLCHandlingType::InvalidOnion]);
 
 	let mut update_fail = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 	assert!(update_fail.update_fail_htlcs.len() == 1);

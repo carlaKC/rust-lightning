@@ -1963,7 +1963,7 @@ macro_rules! expect_pending_htlcs_forwardable_conditions {
 }
 
 #[macro_export]
-macro_rules! expect_htlc_handling_failed_destinations {
+macro_rules! expect_htlc_handling_failed {
 	($events: expr, $expected_failures: expr) => {{
 		let mut num_expected_failures = $expected_failures.len();
 		for event in $events {
@@ -1988,7 +1988,7 @@ pub fn expect_pending_htlcs_forwardable_conditions(events: Vec<Event>, expected_
 	assert_eq!(events.len(), count);
 	assert!(events.iter().find(|event| matches!(event, Event::PendingHTLCsForwardable { .. })).is_some());
 	if expected_failures.len() > 0 {
-		expect_htlc_handling_failed_destinations!(events, expected_failures)
+		expect_htlc_handling_failed!(events, expected_failures)
 	}
 }
 
@@ -2817,7 +2817,7 @@ pub fn do_pass_along_path<'a, 'b, 'c>(args: PassAlongPathArgs) -> Option<Event> 
 				// `ProcessPendingHTLCForwards` event. If we fail during the process of decoding the HTLC,
 				// we'll fail it immediately with no intermediate forwarding event.
 				assert!(events_2.len() == 1 || events_2.len() == 2);
-				expect_htlc_handling_failed_destinations!(events_2, &[failure]);
+				expect_htlc_handling_failed!(events_2, &[failure]);
 				node.node.process_pending_htlc_forwards();
 				check_added_monitors!(node, 1);
 			} else {
@@ -2866,7 +2866,7 @@ pub fn send_probe_along_route<'a, 'b, 'c>(origin_node: &Node<'a, 'b, 'c>, expect
 		let nodes_to_fail_payment: Vec<_> = vec![origin_node].into_iter().chain(path.iter().cloned()).collect();
 
 		fail_payment_along_path(nodes_to_fail_payment.as_slice());
-		expect_htlc_handling_failed_destinations!(
+		expect_htlc_handling_failed!(
 			path.last().unwrap().node.get_and_clear_pending_events(),
 			&[HTLCHandlingType::ReceiveFailed { payment_hash: *payment_hash }]
 		);

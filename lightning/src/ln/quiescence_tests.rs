@@ -142,7 +142,7 @@ fn allow_shutdown_while_awaiting_quiescence(local_shutdown: bool) {
 	remote_node.node.handle_revoke_and_ack(local_node_id, &last_revoke_and_ack);
 	check_added_monitors(remote_node, 1);
 	expect_pending_htlcs_forwardable!(remote_node);
-	expect_htlc_handling_failed_destinations!(
+	expect_htlc_handling_failed!(
 		remote_node.node.get_and_clear_pending_events(),
 		&[HTLCHandlingType::ReceiveFailed { payment_hash }]
 	);

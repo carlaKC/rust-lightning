@@ -14962,7 +14962,7 @@ mod tests {
 	use bitcoin::secp256k1::{PublicKey, Secp256k1, SecretKey};
 	use bitcoin::secp256k1::ecdh::SharedSecret;
 	use core::sync::atomic::Ordering;
-	use crate::events::{Event, HTLCHandlingType, ClosureReason};
+	use crate::events::{Event, HTLCHandlingType, ClosureReason, HTLCHandlingFailureReason};
 	use crate::ln::onion_utils::AttributionData;
 	use crate::ln::types::ChannelId;
 	use crate::types::payment::{PaymentPreimage, PaymentHash, PaymentSecret};
@@ -15101,7 +15101,10 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash: our_payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![(
+		HTLCHandlingType::ReceiveFailed { payment_hash: our_payment_hash },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+	)]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15282,7 +15285,10 @@ mod tests {
 		// We have to forward pending HTLCs twice - once tries to forward the payment forward (and
 		// fails), the second will process the resulting failure and fail the HTLC backward
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![(
+			HTLCHandlingType::ReceiveFailed { payment_hash },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+		)]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15327,7 +15333,10 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![(
+		HTLCHandlingType::ReceiveFailed { payment_hash },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+	)]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -15374,7 +15383,10 @@ mod tests {
 		check_added_monitors!(nodes[1], 0);
 		commitment_signed_dance!(nodes[1], nodes[0], payment_event.commitment_msg, false);
 		expect_pending_htlcs_forwardable!(nodes[1]);
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![HTLCHandlingType::ReceiveFailed { payment_hash }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], vec![(
+		HTLCHandlingType::ReceiveFailed { payment_hash },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+	)]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());

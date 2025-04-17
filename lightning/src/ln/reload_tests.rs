@@ -15,9 +15,9 @@ use crate::chain::channelmonitor::{ChannelMonitor, ChannelMonitorUpdateStep};
 use crate::routing::router::{PaymentParameters, RouteParameters};
 use crate::sign::EntropySource;
 use crate::chain::transaction::OutPoint;
-use crate::events::{ClosureReason, Event, HTLCHandlingType};
+use crate::events::{ClosureReason, Event, HTLCHandlingType, HTLCHandlingFailureReason};
 use crate::ln::channelmanager::{ChannelManager, ChannelManagerReadArgs, PaymentId, RecipientOnionFields, RAACommitmentOrder};
-use crate::ln::msgs;
+use crate::ln::{msgs, LocalHTLCFailureReason};
 use crate::ln::types::ChannelId;
 use crate::ln::msgs::{BaseMessageHandler, ChannelMessageHandler, RoutingMessageHandler, ErrorAction, MessageSendEvent};
 use crate::util::test_channel_signer::TestChannelSigner;
@@ -1112,7 +1112,10 @@ fn do_forwarded_payment_no_manager_persistence(use_cs_commitment: bool, claim_ht
 	}
 
 	if !claim_htlc {
-		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], [HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2 }]);
+		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], [(
+			HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2 },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+			)]);
 	} else {
 		expect_payment_forwarded!(nodes[1], nodes[0], nodes[2], Some(1000), false, true);
 	}
@@ -1178,7 +1181,10 @@ fn removed_payment_no_manager_persistence() {
 	let node_encoded = nodes[1].node.encode();
 
 	nodes[2].node.fail_htlc_backwards(&payment_hash);
-	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], [HTLCHandlingType::ReceiveFailed { payment_hash }]);
+	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], [(
+		HTLCHandlingType::ReceiveFailed { payment_hash },
+		HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+	)]);
 	check_added_monitors!(nodes[2], 1);
 	let events = nodes[2].node.get_and_clear_pending_msg_events();
 	assert_eq!(events.len(), 1);
@@ -1210,7 +1216,10 @@ fn removed_payment_no_manager_persistence() {
 	nodes[0].node.peer_disconnected(nodes[1].node.get_our_node_id());
 	reconnect_nodes(ReconnectArgs::new(&nodes[0], &nodes[1]));
 
-	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], [HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2 }]);
+	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[1], [(
+		HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_id_2 },
+		HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+		)]);
 	check_added_monitors!(nodes[1], 1);
 	let events = nodes[1].node.get_and_clear_pending_msg_events();
 	assert_eq!(events.len(), 1);

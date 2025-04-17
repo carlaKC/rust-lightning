@@ -1,11 +1,11 @@
 use crate::chain::ChannelMonitorUpdateStatus;
-use crate::events::{Event, HTLCHandlingType};
+use crate::events::{Event, HTLCHandlingFailureReason, HTLCHandlingType};
 use crate::ln::channel::DISCONNECT_PEER_AWAITING_RESPONSE_TICKS;
 use crate::ln::channelmanager::PaymentId;
 use crate::ln::channelmanager::RecipientOnionFields;
-use crate::ln::functional_test_utils::*;
 use crate::ln::msgs;
 use crate::ln::msgs::{BaseMessageHandler, ChannelMessageHandler, ErrorAction, MessageSendEvent};
+use crate::ln::{functional_test_utils::*, LocalHTLCFailureReason};
 use crate::util::errors::APIError;
 use crate::util::test_channel_signer::SignerOp;
 
@@ -144,7 +144,10 @@ fn allow_shutdown_while_awaiting_quiescence(local_shutdown: bool) {
 	expect_pending_htlcs_forwardable!(remote_node);
 	expect_htlc_handling_failed!(
 		remote_node.node.get_and_clear_pending_events(),
-		&[HTLCHandlingType::ReceiveFailed { payment_hash }]
+		&[(
+			HTLCHandlingType::ReceiveFailed { payment_hash },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::ChannelClosed),
+		)]
 	);
 	check_added_monitors(remote_node, 1);
 
@@ -342,7 +345,10 @@ fn quiescence_updates_go_to_holding_cell(fail_htlc: bool) {
 	// `stfu`, the `update_fail/fulfill` will go into the holding cell.
 	if fail_htlc {
 		nodes[1].node.fail_htlc_backwards(&payment_hash2);
-		let failed_payment = HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash2 };
+		let failed_payment = (
+			HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash2 },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::ChannelClosed),
+		);
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[1], vec![failed_payment]);
 	} else {
 		nodes[1].node.claim_funds(payment_preimage2);
@@ -392,7 +398,10 @@ fn quiescence_updates_go_to_holding_cell(fail_htlc: bool) {
 	// Have nodes[0] fail/claim nodes[1]'s payment.
 	if fail_htlc {
 		nodes[0].node.fail_htlc_backwards(&payment_hash1);
-		let failed_payment = HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash1 };
+		let failed_payment = (
+			HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash1 },
+			HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionBlinding),
+		);
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(&nodes[0], vec![failed_payment]);
 	} else {
 		nodes[0].node.claim_funds(payment_preimage1);

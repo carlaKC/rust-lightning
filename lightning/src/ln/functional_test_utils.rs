@@ -13,7 +13,7 @@
 use crate::chain::{BestBlock, ChannelMonitorUpdateStatus, Confirm, Listen, Watch};
 use crate::chain::channelmonitor::ChannelMonitor;
 use crate::chain::transaction::OutPoint;
-use crate::events::{ClaimedHTLC, ClosureReason, Event, HTLCHandlingType, PaidBolt12Invoice, PathFailure, PaymentFailureReason, PaymentPurpose};
+use crate::events::{ClaimedHTLC, ClosureReason, Event, HTLCHandlingType, PaidBolt12Invoice, PathFailure, PaymentFailureReason, PaymentPurpose, HTLCHandlingFailureReason};
 use crate::events::bump_transaction::{BumpTransactionEvent, BumpTransactionEventHandler, Wallet, WalletSource};
 use crate::ln::types::ChannelId;
 use crate::types::payment::{PaymentPreimage, PaymentHash, PaymentSecret};
@@ -1969,8 +1969,8 @@ macro_rules! expect_htlc_handling_failed {
 		for event in $events {
 			match event {
 				$crate::events::Event::PendingHTLCsForwardable { .. } => { },
-				$crate::events::Event::HTLCHandlingFailed { ref handling_type, .. } => {
-					assert!($expected_failures.contains(&handling_type));
+				$crate::events::Event::HTLCHandlingFailed { ref handling_type, ref handling_failure, .. } => {
+					assert!($expected_failures.contains(&(handling_type.clone(), handling_failure.unwrap().clone())));
 					num_expected_failures -= 1;
 				},
 				_ => panic!("Unexpected destination"),
@@ -1983,7 +1983,7 @@ macro_rules! expect_htlc_handling_failed {
 /// Checks that an [`Event::PendingHTLCsForwardable`] is available in the given events and, if
 /// there are any [`Event::HTLCHandlingFailed`] events their [`HTLCHandlingType`] is included in the
 /// `expected_failures` set.
-pub fn expect_pending_htlcs_forwardable_conditions(events: Vec<Event>, expected_failures: &[HTLCHandlingType]) {
+pub fn expect_pending_htlcs_forwardable_conditions(events: Vec<Event>, expected_failures: &[(HTLCHandlingType, HTLCHandlingFailureReason)]) {
 	let count = expected_failures.len() + 1;
 	assert_eq!(events.len(), count);
 	assert!(events.iter().find(|event| matches!(event, Event::PendingHTLCsForwardable { .. })).is_some());

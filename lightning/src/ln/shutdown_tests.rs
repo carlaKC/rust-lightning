@@ -13,7 +13,7 @@
 use crate::sign::{EntropySource, SignerProvider};
 use crate::chain::ChannelMonitorUpdateStatus;
 use crate::chain::transaction::OutPoint;
-use crate::events::{Event, HTLCHandlingType, ClosureReason};
+use crate::events::{Event, HTLCHandlingType, ClosureReason, HTLCHandlingFailureReason};
 use crate::ln::channel_state::{ChannelDetails, ChannelShutdownState};
 use crate::ln::channelmanager::{self, PaymentId, RecipientOnionFields, Retry};
 use crate::routing::router::{PaymentParameters, get_route, RouteParameters};
@@ -467,9 +467,10 @@ fn do_htlc_fail_async_shutdown(blinded_recipient: bool) {
 	commitment_signed_dance!(nodes[1], nodes[0], (), false, true, false, false);
 	expect_pending_htlcs_forwardable!(nodes[1]);
 	expect_htlc_handling_failed!(
-		nodes[1].node.get_and_clear_pending_events(),
-		&[HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2 }]
-	);
+		nodes[1].node.get_and_clear_pending_events(), &[(
+		HTLCHandlingType::ForwardFailed { node_id: Some(nodes[2].node.get_our_node_id()), channel_id: chan_2.2 },
+		HTLCHandlingFailureReason::from(LocalHTLCFailureReason::ChannelClosed),
+	)]);
 	check_added_monitors(&nodes[1], 1);
 
 	let updates_2 = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
@@ -1336,7 +1337,10 @@ fn do_outbound_update_no_early_closing_signed(use_htlc: bool) {
 	if use_htlc {
 		nodes[0].node.fail_htlc_backwards(&payment_hash_opt.unwrap());
 		expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[0],
-			[HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash_opt.unwrap() }]);
+			[(
+			HTLCHandlingType::ReceiveFailed { payment_hash: payment_hash_opt.unwrap() },
+				HTLCHandlingFailureReason::from(LocalHTLCFailureReason::InvalidOnionPayload),
+			)]);
 	} else {
 		*chanmon_cfgs[0].fee_estimator.sat_per_kw.lock().unwrap() *= 10;
 		nodes[0].node.timer_tick_occurred();

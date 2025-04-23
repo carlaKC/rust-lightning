@@ -480,8 +480,7 @@ pub enum HTLCHandlingType {
 		channel_id: ChannelId,
 	},
 	/// Scenario where we are unsure of the next node to forward the HTLC to.
-	///
-	/// Deprecated: will only be used in versions before LDK v0.2.0.
+	#[deprecated(since = "2.0", note = "replaced by InvalidForward with UnknownNextPeer reason")]
 	UnknownNextHop {
 		/// Short channel id we are requesting to forward an HTLC to.
 		requested_forward_scid: u64,
@@ -512,6 +511,7 @@ pub enum HTLCHandlingType {
 	},
 }
 
+#[allow(deprecated)] // Allow upgrade from legacy [`HTLCHandlingType::UnknownNextHop`].
 impl_writeable_tlv_based_enum_upgradable!(HTLCHandlingType,
 	(0, ForwardFailed) => {
 		(0, node_id, required),
@@ -1799,6 +1799,7 @@ impl Writeable for Event {
 					(8, path.blinded_tail, option),
 				})
 			},
+			#[allow(deprecated)] // Allow downgrade to [`HTLCHandlingType::UnknownNextHop`].
 			&Event::HTLCHandlingFailed { ref prev_channel_id, ref handling_type, ref handling_failure } => {
 				25u8.write(writer)?;
 
@@ -2265,6 +2266,7 @@ impl MaybeReadable for Event {
 				};
 				f()
 			},
+			#[allow(deprecated)] // Allow upgrade from legacy [`HTLCHandlingType::UnknownNextHop`].
 			25u8 => {
 				let mut f = || {
 					let mut prev_channel_id = ChannelId::new_zero();

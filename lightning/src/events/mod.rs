@@ -480,12 +480,16 @@ pub enum HTLCHandlingFailureType {
 		channel_id: ChannelId,
 	},
 	/// Scenario where we are unsure of the next node to forward the HTLC to.
+	///
+	/// Deprecated: will only be used in versions before LDK v0.2.0.
 	UnknownNextHop {
 		/// Short channel id we are requesting to forward an HTLC to.
 		requested_forward_scid: u64,
 	},
 	/// We couldn't forward to the outgoing scid. An example would be attempting to send a duplicate
 	/// intercept HTLC.
+	///
+	/// In LDK v0.2.0 and greater, this variant replaces [`Self::UnknownNextHop`].
 	InvalidForward {
 		/// Short channel id we are requesting to forward an HTLC to.
 		requested_forward_scid: u64
@@ -1797,10 +1801,26 @@ impl Writeable for Event {
 			},
 			&Event::HTLCHandlingFailed { ref prev_channel_id, ref failure_type, ref failure_reason } => {
 				25u8.write(writer)?;
+
+				// The [`HTLCHandlingType::UnknownNextPeer`] variant is deprecated, but we want to
+				// continue writing it to allow downgrading. Detect the case where we're
+				// representing it as [`HTLCHandlingType::InvalidForward`] and
+				// [`LocalHTLCFailureReason::UnknownNextHop`] and write the old variant instead.
+				let downgradable_type = match (failure_type, failure_reason) {
+					(HTLCHandlingFailureType::InvalidForward { requested_forward_scid },
+						Some(HTLCHandlingFailureReason::Local {
+							reason: LocalHTLCFailureReason::UnknownNextPeer
+						}))
+						=> HTLCHandlingFailureType::UnknownNextHop {
+							requested_forward_scid: *requested_forward_scid,
+						},
+					_ => failure_type.clone()
+				};
+
 				write_tlv_fields!(writer, {
 					(0, prev_channel_id, required),
 					(1, failure_reason, option),
-					(2, failure_type, required),
+					(2, downgradable_type, required),
 				})
 			},
 			&Event::BumpTransaction(ref event)=> {
@@ -2255,11 +2275,31 @@ impl MaybeReadable for Event {
 						(1, failure_reason, option),
 						(2, failure_type_opt, upgradable_required),
 					});
-					Ok(Some(Event::HTLCHandlingFailed {
+
+					let mut event = Event::HTLCHandlingFailed {
 						prev_channel_id,
 						failure_type: _init_tlv_based_struct_field!(failure_type_opt, upgradable_required),
 						failure_reason,
-					}))
+					};
+
+					// The [`HTLCHandlingFailureType::UnknownNextPeer`] variant is deprecated, but
+					// we continue writing it to allow downgrading. If it was written, upgrade
+					// it to its new representation of [`HTLCHandlingFailureType::InvalidForward`]
+					// and [`LocalHTLCFailureReason::UnknownNextHop`]. This will cover both the case
+					// where we have a legacy event and new events that are written with the legacy
+					// type be downgradable.
+					match event {
+						Event::HTLCHandlingFailed { failure_type: HTLCHandlingFailureType::UnknownNextHop { requested_forward_scid }, .. } => {
+								event = Event::HTLCHandlingFailed {
+									prev_channel_id,
+									failure_type: HTLCHandlingFailureType::InvalidForward { requested_forward_scid },
+									failure_reason: Some(LocalHTLCFailureReason::UnknownNextPeer.into()),
+								}
+						}
+						_ => panic!("HTLCHandlingFailed wrong type")
+					}
+
+					Ok(Some(event))
 				};
 				f()
 			},

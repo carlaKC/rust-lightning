@@ -1383,22 +1383,20 @@ where
 		if debug_field_size > 0 && err_packet.failuremsg.len() >= 4 + debug_field_size {
 			log_info!(
 				logger,
-				"Onion Error[from {}: {:?}({:#x}) {}({})] {}",
+				"Onion Error[from {}: {:?}({:#x}) {}({})]",
 				route_hop.pubkey(),
 				error_code,
 				error_code.failure_code(),
 				debug_field,
 				log_bytes!(&err_packet.failuremsg[4..4 + debug_field_size]),
-				error_code
 			);
 		} else {
 			log_info!(
 				logger,
-				"Onion Error[from {}: {:?}({:#x})] {}",
+				"Onion Error[from {}: {:?}({:#x})]",
 				route_hop.pubkey(),
 				error_code,
 				error_code.failure_code(),
-				error_code
 			);
 		}
 
@@ -1652,6 +1650,7 @@ impl LocalHTLCFailureReason {
 		}
 	}
 
+	/// Returns the name of an error's data field and its expected length.
 	fn get_onion_debug_field(&self) -> (&'static str, usize) {
 		match self {
 			Self::InvalidOnionVersion | Self::InvalidOnionHMAC | Self::InvalidOnionKey => {
@@ -1681,7 +1680,9 @@ impl LocalHTLCFailureReason {
 		self.failure_code() & NODE == NODE
 	}
 
-	/// Returns true if the failure is only sent by the final recipient.
+	/// Returns true if the failure is only sent by the final recipient. Note that this function
+	/// only checks [`LocalHTLCFailureReason`] variants that represent bolt 04 errors directly,
+	/// as it's intended to analyze errors we've received as a sender.
 	fn is_recipient_failure(&self) -> bool {
 		self.failure_code() == LocalHTLCFailureReason::IncorrectPaymentDetails.failure_code()
 			|| *self == LocalHTLCFailureReason::FinalIncorrectCLTVExpiry

@@ -4460,7 +4460,7 @@ where
 
 		log_info!(
 			WithContext::from(&self.logger, Some(*counterparty_node_id), Some(msg.channel_id), Some(msg.payment_hash)),
-			"Failed to accept/forward incoming HTLC: {:?} - {}", reason, reason,
+			"Failed to accept/forward incoming HTLC: {:?}", reason,
 		);
 		// If `msg.blinding_point` is set, we must always fail with malformed.
 		if msg.blinding_point.is_some() {

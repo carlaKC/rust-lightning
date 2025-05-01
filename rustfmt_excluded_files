@@ -20,7 +20,6 @@ lightning/src/ln/max_payment_path_len_tests.rs
 lightning/src/ln/mod.rs
 lightning/src/ln/monitor_tests.rs
 lightning/src/ln/offers_tests.rs
-lightning/src/ln/onion_payment.rs
 lightning/src/ln/onion_route_tests.rs
 lightning/src/ln/outbound_payment.rs
 lightning/src/ln/payment_tests.rs

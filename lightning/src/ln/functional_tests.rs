@@ -1292,31 +1292,31 @@ pub fn holding_cell_htlc_counting() {
 	nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &initial_payment_event.commitment_msg);
 	check_added_monitors!(nodes[2], 1);
 
-	let (bs_revoke_and_ack, bs_commitment_signed) = get_revoke_commit_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_revoke_and_ack);
+	let (cs_revoke_and_ack, cs_commitment_signed) = get_revoke_commit_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_revoke_and_ack);
 	check_added_monitors!(nodes[1], 1);
-	let as_updates = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
+	let bs_updates = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
 
-	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &bs_commitment_signed);
+	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_commitment_signed);
 	check_added_monitors!(nodes[1], 1);
-	let as_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	let bs_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
 
-	for ref update in as_updates.update_add_htlcs.iter() {
+	for ref update in bs_updates.update_add_htlcs.iter() {
 		nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), update);
 	}
-	nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &as_updates.commitment_signed);
+	nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &bs_updates.commitment_signed);
 	check_added_monitors!(nodes[2], 1);
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_raa);
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_raa);
 	check_added_monitors!(nodes[2], 1);
-	let (bs_revoke_and_ack, bs_commitment_signed) = get_revoke_commit_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	let (cs_revoke_and_ack, cs_commitment_signed) = get_revoke_commit_msgs!(nodes[2], nodes[1].node.get_our_node_id());
 
-	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_revoke_and_ack);
+	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_revoke_and_ack);
 	check_added_monitors!(nodes[1], 1);
-	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &bs_commitment_signed);
+	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_commitment_signed);
 	check_added_monitors!(nodes[1], 1);
-	let as_final_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	let bs_final_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
 
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_final_raa);
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_final_raa);
 	check_added_monitors!(nodes[2], 1);
 
 	expect_pending_htlcs_forwardable!(nodes[2]);
@@ -2091,11 +2091,11 @@ pub fn test_channel_reserve_holding_cell_htlcs() {
 	let commitment_update_2 = get_htlc_update_msgs!(nodes[0], nodes[1].node.get_our_node_id());
 
 	nodes[0].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &as_commitment_signed);
-	let bs_revoke_and_ack = get_event_msg!(nodes[0], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id());
+	let as_revoke_and_ack = get_event_msg!(nodes[0], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id());
 	// No commitment_signed so get_event_msg's assert(len == 1) passes
 	check_added_monitors!(nodes[0], 1);
 
-	nodes[1].node.handle_revoke_and_ack(nodes[0].node.get_our_node_id(), &bs_revoke_and_ack);
+	nodes[1].node.handle_revoke_and_ack(nodes[0].node.get_our_node_id(), &as_revoke_and_ack);
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
 	check_added_monitors!(nodes[1], 1);
 

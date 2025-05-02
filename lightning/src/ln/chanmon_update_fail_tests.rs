@@ -828,15 +828,15 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCHandlingFailureType::Receive { payment_hash: payment_hash_1 }]);
 	check_added_monitors!(nodes[2], 1);
 
-	let updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	assert!(updates.update_add_htlcs.is_empty());
-	assert!(updates.update_fulfill_htlcs.is_empty());
-	assert_eq!(updates.update_fail_htlcs.len(), 1);
-	assert!(updates.update_fail_malformed_htlcs.is_empty());
-	assert!(updates.update_fee.is_none());
-	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
+	let cs_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	assert!(cs_updates.update_add_htlcs.is_empty());
+	assert!(cs_updates.update_fulfill_htlcs.is_empty());
+	assert_eq!(cs_updates.update_fail_htlcs.len(), 1);
+	assert!(cs_updates.update_fail_malformed_htlcs.is_empty());
+	assert!(cs_updates.update_fee.is_none());
+	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &cs_updates.update_fail_htlcs[0]);
 
-	let bs_revoke_and_ack = commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, false, true, false, true);
+	let cs_revoke_and_ack = commitment_signed_dance!(nodes[1], nodes[2], cs_updates.commitment_signed, false, true, false, true);
 	check_added_monitors!(nodes[0], 0);
 
 	// While the second channel is AwaitingRAA, forward a second payment to get it into the
@@ -858,7 +858,7 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 
 	// Now fail monitor updating.
 	chanmon_cfgs[1].persister.set_update_ret(ChannelMonitorUpdateStatus::InProgress);
-	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_revoke_and_ack);
+	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_revoke_and_ack);
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
 	assert!(nodes[1].node.get_and_clear_pending_events().is_empty());
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
@@ -954,34 +954,34 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 	expect_payment_failed!(nodes[0], payment_hash_1, true);
 
 	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &send_event_b.msgs[0]);
-	let as_cs;
+	let bs_updates;
 	if test_ignore_second_cs {
 		nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &send_event_b.commitment_msg);
 		check_added_monitors!(nodes[2], 1);
-		let bs_revoke_and_ack = get_event_msg!(nodes[2], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id());
+		let cs_revoke_and_ack = get_event_msg!(nodes[2], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id()); // TODO
 		nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &raa.unwrap());
 		check_added_monitors!(nodes[2], 1);
-		let bs_cs = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-		assert!(bs_cs.update_add_htlcs.is_empty());
-		assert!(bs_cs.update_fail_htlcs.is_empty());
-		assert!(bs_cs.update_fail_malformed_htlcs.is_empty());
-		assert!(bs_cs.update_fulfill_htlcs.is_empty());
-		assert!(bs_cs.update_fee.is_none());
+		let cs_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+		assert!(cs_updates.update_add_htlcs.is_empty());
+		assert!(cs_updates.update_fail_htlcs.is_empty());
+		assert!(cs_updates.update_fail_malformed_htlcs.is_empty());
+		assert!(cs_updates.update_fulfill_htlcs.is_empty());
+		assert!(cs_updates.update_fee.is_none());
 
-		nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_revoke_and_ack);
+		nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_revoke_and_ack);
 		check_added_monitors!(nodes[1], 1);
-		as_cs = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
+		bs_updates = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
 
-		nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &bs_cs.commitment_signed);
+		nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_updates.commitment_signed);
 		check_added_monitors!(nodes[1], 1);
 	} else {
 		nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &send_event_b.commitment_msg);
 		check_added_monitors!(nodes[2], 1);
 
-		let bs_revoke_and_commit = nodes[2].node.get_and_clear_pending_msg_events();
+		let cs_revoke_and_commit = nodes[2].node.get_and_clear_pending_msg_events();
 		// As both messages are for nodes[1], they're in order.
-		assert_eq!(bs_revoke_and_commit.len(), 2);
-		match bs_revoke_and_commit[0] {
+		assert_eq!(cs_revoke_and_commit.len(), 2);
+		match cs_revoke_and_commit[0] {
 			MessageSendEvent::SendRevokeAndACK { ref node_id, ref msg } => {
 				assert_eq!(*node_id, nodes[1].node.get_our_node_id());
 				nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &msg);
@@ -990,9 +990,9 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 			_ => panic!("Unexpected event"),
 		}
 
-		as_cs = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
+		bs_updates = get_htlc_update_msgs!(nodes[1], nodes[2].node.get_our_node_id());
 
-		match bs_revoke_and_commit[1] {
+		match cs_revoke_and_commit[1] {
 			MessageSendEvent::UpdateHTLCs { ref node_id, channel_id: _, ref updates } => {
 				assert_eq!(*node_id, nodes[1].node.get_our_node_id());
 				assert!(updates.update_add_htlcs.is_empty());
@@ -1007,32 +1007,32 @@ fn do_test_monitor_update_fail_raa(test_ignore_second_cs: bool) {
 		}
 	}
 
-	assert_eq!(as_cs.update_add_htlcs.len(), 1);
-	assert!(as_cs.update_fail_htlcs.is_empty());
-	assert!(as_cs.update_fail_malformed_htlcs.is_empty());
-	assert!(as_cs.update_fulfill_htlcs.is_empty());
-	assert!(as_cs.update_fee.is_none());
-	let as_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	assert_eq!(bs_updates.update_add_htlcs.len(), 1);
+	assert!(bs_updates.update_fail_htlcs.is_empty());
+	assert!(bs_updates.update_fail_malformed_htlcs.is_empty());
+	assert!(bs_updates.update_fulfill_htlcs.is_empty());
+	assert!(bs_updates.update_fee.is_none());
+	let bs_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
 
 
-	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &as_cs.update_add_htlcs[0]);
-	nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &as_cs.commitment_signed);
+	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &bs_updates.update_add_htlcs[0]);
+	nodes[2].node.handle_commitment_signed_batch_test(nodes[1].node.get_our_node_id(), &bs_updates.commitment_signed);
 	check_added_monitors!(nodes[2], 1);
-	let bs_second_raa = get_event_msg!(nodes[2], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id());
+	let cs_second_raa = get_event_msg!(nodes[2], MessageSendEvent::SendRevokeAndACK, nodes[1].node.get_our_node_id());
 
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_raa);
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_raa);
 	check_added_monitors!(nodes[2], 1);
-	let bs_second_cs = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	let cs_second_update = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
 
-	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_second_raa);
+	nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_second_raa);
 	check_added_monitors!(nodes[1], 1);
 	assert!(nodes[1].node.get_and_clear_pending_msg_events().is_empty());
 
-	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &bs_second_cs.commitment_signed);
+	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_second_update.commitment_signed);
 	check_added_monitors!(nodes[1], 1);
-	let as_second_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	let bs_second_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
 
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_second_raa);
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_second_raa);
 	check_added_monitors!(nodes[2], 1);
 	assert!(nodes[2].node.get_and_clear_pending_msg_events().is_empty());
 

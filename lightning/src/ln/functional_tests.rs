@@ -12036,8 +12036,8 @@ pub fn test_funding_signed_event() {
 	mine_transaction(&nodes[0], &tx);
 	mine_transaction(&nodes[1], &tx);
 
-	let as_channel_ready = get_event_msg!(nodes[1], MessageSendEvent::SendChannelReady, nodes[0].node.get_our_node_id());
-	nodes[1].node.handle_channel_ready(nodes[0].node.get_our_node_id(), &as_channel_ready);
+	let bs_channel_ready = get_event_msg!(nodes[1], MessageSendEvent::SendChannelReady, nodes[0].node.get_our_node_id());
+	nodes[1].node.handle_channel_ready(nodes[0].node.get_our_node_id(), &bs_channel_ready);
 	let as_channel_ready = get_event_msg!(nodes[0], MessageSendEvent::SendChannelReady, nodes[1].node.get_our_node_id());
 	nodes[0].node.handle_channel_ready(nodes[1].node.get_our_node_id(), &as_channel_ready);
 

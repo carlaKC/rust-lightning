@@ -3616,7 +3616,7 @@ pub fn test_simple_commitment_revoked_fail_backward() {
 	}
 }
 
-fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use_dust: bool, no_to_remote: bool) {
+fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_raa_to_b: bool, use_dust: bool, no_to_remote: bool) {
 	// Test that if our counterparty broadcasts a revoked commitment transaction we fail all
 	// pending HTLCs on that channel backwards even if the HTLCs aren't present in our latest
 	// commitment transaction anymore.
@@ -3662,50 +3662,50 @@ fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use
 	nodes[2].node.fail_htlc_backwards(&first_payment_hash);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCHandlingFailureType::Receive { payment_hash: first_payment_hash }]);
 	check_added_monitors!(nodes[2], 1);
-	let updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	assert!(updates.update_add_htlcs.is_empty());
-	assert!(updates.update_fulfill_htlcs.is_empty());
-	assert!(updates.update_fail_malformed_htlcs.is_empty());
-	assert_eq!(updates.update_fail_htlcs.len(), 1);
-	assert!(updates.update_fee.is_none());
-	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	let bs_raa = commitment_signed_dance!(nodes[1], nodes[2], updates.commitment_signed, false, true, false, true);
+	let cs_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	assert!(cs_updates.update_add_htlcs.is_empty());
+	assert!(cs_updates.update_fulfill_htlcs.is_empty());
+	assert!(cs_updates.update_fail_malformed_htlcs.is_empty());
+	assert_eq!(cs_updates.update_fail_htlcs.len(), 1);
+	assert!(cs_updates.update_fee.is_none());
+	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &cs_updates.update_fail_htlcs[0]);
+	let cs_raa = commitment_signed_dance!(nodes[1], nodes[2], cs_updates.commitment_signed, false, true, false, true);
 	// Drop the last RAA from 3 -> 2
 
 	nodes[2].node.fail_htlc_backwards(&second_payment_hash);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCHandlingFailureType::Receive { payment_hash: second_payment_hash }]);
 	check_added_monitors!(nodes[2], 1);
-	let updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	assert!(updates.update_add_htlcs.is_empty());
-	assert!(updates.update_fulfill_htlcs.is_empty());
-	assert!(updates.update_fail_malformed_htlcs.is_empty());
-	assert_eq!(updates.update_fail_htlcs.len(), 1);
-	assert!(updates.update_fee.is_none());
-	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
-	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &updates.commitment_signed);
+	let cs_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	assert!(cs_updates.update_add_htlcs.is_empty());
+	assert!(cs_updates.update_fulfill_htlcs.is_empty());
+	assert!(cs_updates.update_fail_malformed_htlcs.is_empty());
+	assert_eq!(cs_updates.update_fail_htlcs.len(), 1);
+	assert!(cs_updates.update_fee.is_none());
+	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &cs_updates.update_fail_htlcs[0]);
+	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_updates.commitment_signed);
 	check_added_monitors!(nodes[1], 1);
 	// Note that nodes[1] is in AwaitingRAA, so won't send a CS
-	let as_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_raa);
+	let bs_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_raa);
 	check_added_monitors!(nodes[2], 1);
 
 	nodes[2].node.fail_htlc_backwards(&third_payment_hash);
 	expect_pending_htlcs_forwardable_and_htlc_handling_failed!(nodes[2], vec![HTLCHandlingFailureType::Receive { payment_hash: third_payment_hash }]);
 	check_added_monitors!(nodes[2], 1);
-	let updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
-	assert!(updates.update_add_htlcs.is_empty());
-	assert!(updates.update_fulfill_htlcs.is_empty());
-	assert!(updates.update_fail_malformed_htlcs.is_empty());
-	assert_eq!(updates.update_fail_htlcs.len(), 1);
-	assert!(updates.update_fee.is_none());
-	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &updates.update_fail_htlcs[0]);
+	let cs_updates = get_htlc_update_msgs!(nodes[2], nodes[1].node.get_our_node_id());
+	assert!(cs_updates.update_add_htlcs.is_empty());
+	assert!(cs_updates.update_fulfill_htlcs.is_empty());
+	assert!(cs_updates.update_fail_malformed_htlcs.is_empty());
+	assert_eq!(cs_updates.update_fail_htlcs.len(), 1);
+	assert!(cs_updates.update_fee.is_none());
+	nodes[1].node.handle_update_fail_htlc(nodes[2].node.get_our_node_id(), &cs_updates.update_fail_htlcs[0]);
 	// At this point first_payment_hash has dropped out of the latest two commitment
 	// transactions that nodes[1] is tracking...
-	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &updates.commitment_signed);
+	nodes[1].node.handle_commitment_signed_batch_test(nodes[2].node.get_our_node_id(), &cs_updates.commitment_signed);
 	check_added_monitors!(nodes[1], 1);
 	// Note that nodes[1] is (still) in AwaitingRAA, so won't send a CS
-	let as_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
-	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &as_raa);
+	let bs_raa = get_event_msg!(nodes[1], MessageSendEvent::SendRevokeAndACK, nodes[2].node.get_our_node_id());
+	nodes[2].node.handle_revoke_and_ack(nodes[1].node.get_our_node_id(), &bs_raa);
 	check_added_monitors!(nodes[2], 1);
 
 	// Add a fourth HTLC, this one will get sequestered away in nodes[1]'s holding cell waiting
@@ -3717,8 +3717,8 @@ fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use
 	assert!(nodes[1].node.get_and_clear_pending_events().is_empty());
 	check_added_monitors!(nodes[1], 0);
 
-	if deliver_bs_raa {
-		nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &bs_raa);
+	if deliver_raa_to_b {
+		nodes[1].node.handle_revoke_and_ack(nodes[2].node.get_our_node_id(), &cs_raa);
 		// One monitor for the new revocation preimage, no second on as we won't generate a new
 		// commitment transaction for nodes[0] until process_pending_htlc_forwards().
 		check_added_monitors!(nodes[1], 1);
@@ -3744,7 +3744,7 @@ fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use
 	connect_blocks(&nodes[1], ANTI_REORG_DELAY - 1);
 
 	let events = nodes[1].node.get_and_clear_pending_events();
-	assert_eq!(events.len(), if deliver_bs_raa { 3 + nodes.len() - 1 } else { 4 + nodes.len() });
+	assert_eq!(events.len(), if deliver_raa_to_b { 3 + nodes.len() - 1 } else { 4 + nodes.len() });
 	assert!(events.iter().any(|ev| matches!(
 		ev,
 		Event::ChannelClosed { reason: ClosureReason::CommitmentTxConfirmed, .. }
@@ -3762,9 +3762,9 @@ fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use
 	check_added_monitors!(nodes[1], 1);
 
 	let mut events = nodes[1].node.get_and_clear_pending_msg_events();
-	assert_eq!(events.len(), if deliver_bs_raa { 4 } else { 3 });
+	assert_eq!(events.len(), if deliver_raa_to_b { 4 } else { 3 });
 
-	if deliver_bs_raa {
+	if deliver_raa_to_b {
 		let nodes_2_event = remove_first_msg_event_to_node(&nodes[2].node.get_our_node_id(), &mut events);
 		match nodes_2_event {
 			MessageSendEvent::UpdateHTLCs { ref node_id, channel_id: _, updates: msgs::CommitmentUpdate { ref update_add_htlcs, ref update_fail_htlcs, ref update_fulfill_htlcs, ref update_fail_malformed_htlcs, .. } } => {
@@ -3809,7 +3809,7 @@ fn do_test_commitment_revoked_fail_backward_exhaustive(deliver_bs_raa: bool, use
 					assert!(failed_htlcs.insert(payment_hash.0));
 					// If we delivered B's RAA we got an unknown preimage error, not something
 					// that we should update our routing table for.
-					if !deliver_bs_raa {
+					if !deliver_raa_to_b {
 						if let PathFailure::OnPath { network_update: Some(_) } = failure { } else { panic!("Unexpected path failure") }
 					}
 				},

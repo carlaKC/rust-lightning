@@ -1543,10 +1543,10 @@ pub fn create_unannounced_chan_between_nodes_with_value<'a, 'b, 'c, 'd>(nodes: &
 	nodes[b].node.handle_funding_created(nodes[a].node.get_our_node_id(), &get_event_msg!(nodes[a], MessageSendEvent::SendFundingCreated, nodes[b].node.get_our_node_id()));
 	check_added_monitors!(nodes[b], 1);
 
-	let cs_funding_signed = get_event_msg!(nodes[b], MessageSendEvent::SendFundingSigned, nodes[a].node.get_our_node_id());
+	let bs_funding_signed = get_event_msg!(nodes[b], MessageSendEvent::SendFundingSigned, nodes[a].node.get_our_node_id());
 	expect_channel_pending_event(&nodes[b], &nodes[a].node.get_our_node_id());
 
-	nodes[a].node.handle_funding_signed(nodes[b].node.get_our_node_id(), &cs_funding_signed);
+	nodes[a].node.handle_funding_signed(nodes[b].node.get_our_node_id(), &bs_funding_signed);
 	expect_channel_pending_event(&nodes[a], &nodes[b].node.get_our_node_id());
 	check_added_monitors!(nodes[a], 1);
 

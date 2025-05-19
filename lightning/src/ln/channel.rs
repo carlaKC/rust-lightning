@@ -13150,6 +13150,20 @@ mod tests {
 		do_test_supports_channel_type(config, expected_channel_type)
 	}
 
+	#[test]
+	fn test_supports_zero_fee_commitments() {
+		// Tests that if both sides support and negotiate `anchors_zero_fee_commitments`, it is
+		// the resulting `channel_type`.
+		let mut config = UserConfig::default();
+		config.channel_handshake_config.negotiate_anchor_zero_fee_commitments = true;
+
+		let mut expected_channel_type = ChannelTypeFeatures::empty();
+		expected_channel_type.set_static_remote_key_required();
+		expected_channel_type.set_anchor_zero_fee_commitments_required();
+
+		do_test_supports_channel_type(config, expected_channel_type)
+	}
+
 	fn do_test_supports_channel_type(config: UserConfig, expected_channel_type: ChannelTypeFeatures) {
 		let secp_ctx = Secp256k1::new();
 		let fee_estimator = LowerBoundedFeeEstimator::new(&TestFeeEstimator{fee_est: 15000});
@@ -13184,6 +13198,14 @@ mod tests {
 
 		assert_eq!(channel_a.funding.get_channel_type(), &expected_channel_type);
 		assert_eq!(channel_b.funding.get_channel_type(), &expected_channel_type);
+
+		if expected_channel_type.supports_anchor_zero_fee_commitments() {
+			assert_eq!(channel_a.context.feerate_per_kw, 0);
+			assert_eq!(channel_b.context.feerate_per_kw, 0);
+		} else {
+			assert_ne!(channel_a.context.feerate_per_kw, 0);
+			assert_ne!(channel_b.context.feerate_per_kw, 0);
+		}
 	}
 
 	#[test]

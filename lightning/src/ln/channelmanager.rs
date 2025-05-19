@@ -8175,7 +8175,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 		if channel_type.requires_zero_conf() {
 			return Err(MsgHandleErrInternal::send_err_msg_no_close("No zero confirmation channels accepted".to_owned(), common_fields.temporary_channel_id));
 		}
-		if channel_type.requires_anchors_zero_fee_htlc_tx() {
+		if channel_type.requires_anchors_zero_fee_htlc_tx() || channel_type.requires_anchor_zero_fee_commitments() {
 			return Err(MsgHandleErrInternal::send_err_msg_no_close("No channels with anchor outputs accepted".to_owned(), common_fields.temporary_channel_id));
 		}
 

@@ -3628,7 +3628,15 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 	fn get_dust_exposure_limiting_feerate<F: Deref>(&self,
 		fee_estimator: &LowerBoundedFeeEstimator<F>,
 	) -> u32 where F::Target: FeeEstimator {
-		fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::MaximumFeeEstimate)
+		if self.channel_type.supports_anchor_zero_fee_commitments() {
+			// We never actually deal with feerate-correlated dust for zero-fee commitment
+			// channels, but we can of course still have dust HTLCs which we need to limit. Because
+			// our dust is no longer feerate-correlated there's no reason to consider feerate when
+			// calculating the dust limit, and thus we fix our limiting feerate to 1 sat/vB here.
+			250
+		} else {
+			fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::MaximumFeeEstimate)
+		}
 	}
 
 	pub fn get_max_dust_htlc_exposure_msat(&self, limiting_feerate_sat_per_kw: u32) -> u64 {
@@ -6676,6 +6684,10 @@ impl<SP: Deref> FundedChannel<SP> where
 		}
 		if !self.context.is_live() {
 			panic!("Cannot update fee while peer is disconnected/we're awaiting a monitor update (ChannelManager should have caught this)");
+		}
+
+		if self.context.channel_type.supports_anchor_zero_fee_commitments() {
+			return None;
 		}
 
 		// Before proposing a feerate update, check that we can actually afford the new fee.

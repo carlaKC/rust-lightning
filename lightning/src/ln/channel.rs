@@ -10569,19 +10569,8 @@ fn get_initial_channel_type(config: &UserConfig, their_features: &InitFeatures) 
 	// If they don't understand it (or we don't want it), we check the same conditions for
 	// `option_anchors_zero_fee_htlc_tx`. The counterparty can still refuse the channel and we'll
 	// try to fall back (all the way to `only_static_remotekey`).
-
-	let negotiate_zero_fee_commitments: bool = {
-		#[cfg(test)]
-		{
-			config.channel_handshake_config.negotiate_anchor_zero_fee_commitments
-		}
-		#[cfg(not(test))]
-		{
-			false
-		}
-	};
-
-	if negotiate_zero_fee_commitments && their_features.supports_anchor_zero_fee_commitments() {
+	if config.channel_handshake_config.negotiate_anchor_zero_fee_commitments
+		&& their_features.supports_anchor_zero_fee_commitments() {
 		ret.set_anchor_zero_fee_commitments_required();
 	} else if config.channel_handshake_config.negotiate_anchors_zero_fee_htlc_tx &&
 		their_features.supports_anchors_zero_fee_htlc_tx() {

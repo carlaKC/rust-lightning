@@ -4866,7 +4866,7 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 
 			self.feerate_per_kw = fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::AnchorChannelFee);
 			debug_assert!(!channel_type.supports_anchor_zero_fee_commitments());
-			debug_assert!(channel_type.supports_anchors_nonzero_fee_htlc_tx());
+			debug_assert!(channel_type.supports_anchors_zero_fee_htlc_tx());
 		} else if channel_type.supports_anchors_zero_fee_htlc_tx() {
 			channel_type.clear_anchors_zero_fee_htlc_tx();
 			self.feerate_per_kw = fee_estimator.bounded_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee);

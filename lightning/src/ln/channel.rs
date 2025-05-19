@@ -3036,12 +3036,18 @@ impl<SP: Deref> ChannelContext<SP> where SP::Target: SignerProvider {
 		debug_assert!(!channel_type.supports_any_optional_bits());
 		debug_assert!(!channel_type.requires_unknown_bits_from(&channelmanager::provided_channel_type_features(&config)));
 
-		let (commitment_conf_target, anchor_outputs_value_msat)  = if channel_type.supports_anchors_zero_fee_htlc_tx() {
-			(ConfirmationTarget::AnchorChannelFee, ANCHOR_OUTPUT_VALUE_SATOSHI * 2 * 1000)
-		} else {
-			(ConfirmationTarget::NonAnchorChannelFee, 0)
-		};
-		let commitment_feerate = fee_estimator.bounded_sat_per_1000_weight(commitment_conf_target);
+		let (commitment_feerate, anchor_outputs_value_msat) =
+			if channel_type.supports_anchor_zero_fee_commitments() {
+				(0, 0)
+			} else if channel_type.supports_anchors_zero_fee_htlc_tx() {
+				let feerate = fee_estimator
+					.bounded_sat_per_1000_weight(ConfirmationTarget::AnchorChannelFee);
+				(feerate, ANCHOR_OUTPUT_VALUE_SATOSHI * 2 * 1000)
+			} else {
+				let feerate = fee_estimator
+					.bounded_sat_per_1000_weight(ConfirmationTarget::NonAnchorChannelFee);
+				(feerate, 0)
+			};
 
 		let value_to_self_msat = channel_value_satoshis * 1000 - push_msat;
 		let commitment_tx_fee = commit_tx_fee_sat(commitment_feerate, MIN_AFFORDABLE_HTLC_COUNT, &channel_type) * 1000;
@@ -5230,6 +5236,15 @@ impl<SP: Deref> FundedChannel<SP> where
 		feerate_per_kw: u32, cur_feerate_per_kw: Option<u32>, logger: &L
 	) -> Result<(), ChannelError> where F::Target: FeeEstimator, L::Target: Logger,
 	{
+		if channel_type.supports_anchor_zero_fee_commitments() {
+			if feerate_per_kw != 0 {
+				let err = "Zero Fee Channels must never attempt to use a fee".to_owned();
+				return Err(ChannelError::close(err));
+			} else {
+				return Ok(());
+			}
+		}
+
 		let lower_limit_conf_target = if channel_type.supports_anchors_zero_fee_htlc_tx() {
 			ConfirmationTarget::MinAllowedAnchorChannelRemoteFee
 		} else {

@@ -16121,6 +16121,13 @@ mod tests {
 		assert_eq!(accept_message.channel_reserve_satoshis, 2_000);
 	}
 
+	#[test]
+	fn test_inbound_zero_fee_commitments_acceptance(){
+		let mut zero_fee_cfg = test_default_channel_config();
+		zero_fee_cfg.channel_handshake_config.negotiate_anchor_zero_fee_commitments = true;
+		do_test_manual_inbound_accept_with_override(zero_fee_cfg, None);
+	}
+
 	fn do_test_manual_inbound_accept_with_override(start_cfg: UserConfig,
 		config_overrides: Option<ChannelConfigOverrides>) -> AcceptChannel {
 

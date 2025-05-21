@@ -50,7 +50,7 @@ use crate::ln::chan_utils::{
 	self, ChannelTransactionParameters, CommitmentTransaction, CounterpartyCommitmentSecrets,
 	HTLCClaim, HTLCOutputInCommitment, HolderCommitmentTransaction,
 };
-use crate::ln::channel::{INITIAL_COMMITMENT_NUMBER, ANCHOR_OUTPUT_VALUE_SATOSHI};
+use crate::ln::channel::{ANCHOR_OUTPUT_VALUE_SATOSHI, INITIAL_COMMITMENT_NUMBER};
 use crate::ln::channel_keys::{
 	DelayedPaymentBasepoint, DelayedPaymentKey, HtlcBasepoint, HtlcKey, RevocationBasepoint,
 	RevocationKey,

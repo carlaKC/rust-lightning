@@ -1023,8 +1023,8 @@ mod tests {
 		BumpTransactionEventHandlerSync, CoinSelectionSourceSync,
 	};
 	use crate::io::Cursor;
-	use crate::ln::channel::ANCHOR_OUTPUT_VALUE_SATOSHI;
 	use crate::ln::chan_utils::ChannelTransactionParameters;
+	use crate::ln::channel::ANCHOR_OUTPUT_VALUE_SATOSHI;
 	use crate::sign::KeysManager;
 	use crate::types::features::ChannelTypeFeatures;
 	use crate::util::ser::Readable;

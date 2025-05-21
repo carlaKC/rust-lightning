@@ -14784,11 +14784,14 @@ pub fn provided_init_features(config: &UserConfig) -> InitFeatures {
 	#[cfg(any(test, fuzzing))]
 	features.set_quiescence_optional();
 
-	#[cfg(test)]
 	if config.channel_handshake_config.negotiate_anchor_zero_fee_commitments {
 		features.set_anchor_zero_fee_commitments_optional();
 	}
 
+	// Only signal quiescence support in tests for now, as we don't yet support any
+	// quiescent-dependent protocols (e.g., splicing).
+	#[cfg(any(test, fuzzing))]
+	features.set_quiescence_optional();
 	features
 }
 

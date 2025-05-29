@@ -12,7 +12,9 @@
 //! claim outputs on-chain.
 
 use crate::chain;
-use crate::chain::chaininterface::LowerBoundedFeeEstimator;
+use crate::chain::chaininterface::{
+	ConfirmationTarget, FeeEstimator, LowerBoundedFeeEstimator,
+};
 use crate::chain::channelmonitor;
 use crate::chain::channelmonitor::{
 	Balance, ChannelMonitorUpdateStep, ANTI_REORG_DELAY, CLTV_CLAIM_BUFFER,
@@ -26,7 +28,7 @@ use crate::events::{
 	PaymentPurpose,
 };
 use crate::ln::chan_utils::{
-	commitment_tx_base_weight, htlc_success_tx_weight, htlc_timeout_tx_weight,
+	commit_tx_fee_sat, commitment_tx_base_weight, htlc_success_tx_weight, htlc_timeout_tx_weight,
 	COMMITMENT_TX_WEIGHT_PER_HTLC, OFFERED_HTLC_SCRIPT_WEIGHT,
 };
 use crate::ln::channel::{
@@ -11701,4 +11703,60 @@ pub fn test_funding_signed_event() {
 	expect_channel_ready_event(&nodes[1], &node_a_id);
 	nodes[0].node.get_and_clear_pending_msg_events();
 	nodes[1].node.get_and_clear_pending_msg_events();
+}
+
+#[test]
+fn test_anchor_channel_balance() {
+	// Our test depends on checking that our fee rate is higher than we expect - so we pull the hard
+	// coded value for our fee estimator.
+	let chanmon_cfgs = create_chanmon_cfgs(2);
+	let fee_rate_per_1000_weight = chanmon_cfgs[0]
+		.fee_estimator
+		// Note: println debug confirmed that this is always 253, so the conf target that we get
+		// really doesn't matter.
+		.get_est_sat_per_1000_weight(ConfirmationTarget::AnchorChannelFee);
+
+	// To negoitate anchors, we need custom config.
+	let mut config = test_default_channel_config();
+	config.channel_handshake_config.negotiate_anchors_zero_fee_htlc_tx = true;
+	config.manually_accept_inbound_channels = true;
+
+	let node_cfgs = create_node_cfgs(2, &chanmon_cfgs);
+	let node_chanmgrs = create_node_chanmgrs(2, &node_cfgs, &[Some(config.clone()), Some(config)]);
+	let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
+
+	// Create a channel between Alice and Bob with no balance on Bob's side. This means that we
+	// only expect one balance output (Alice's) and an anchor for Alice.
+	let chan_amt = 100000;
+	let (_, _, chan_ab_id, _) =
+		create_announced_chan_between_nodes_with_value(&nodes, 0, 1, chan_amt, 0);
+
+	let alice_txn = get_local_commitment_txn!(nodes[0], chan_ab_id);
+	assert_eq!(alice_txn.len(), 1);
+	assert_eq!(alice_txn[0].input.len(), 1);
+	assert_eq!(alice_txn[0].output.len(), 2); // There should be a to_local and an anchor.
+
+	// We know the input to our commitment is just our funding amount, so we can calculate our
+	// actual fee.
+	let mut fee_amt = chan_amt;
+	for txout in alice_txn[0].output.iter() {
+		let output_amt = txout.value.to_sat();
+		fee_amt -= output_amt;
+	}
+	assert!(fee_amt != chan_amt);
+
+	// Use the same fee estimation that we use in `build_commitment_stats` rather than using
+	// the actual tx weight (since this is what we do when we sign our commitments).
+	let expected_fee = commit_tx_fee_sat(
+		fee_rate_per_1000_weight,
+		0,
+		&ChannelTypeFeatures::anchors_zero_htlc_fee_and_dependencies(),
+	);
+
+	// I hypothesize that LDK is:
+	// - Subtracting balance for two anchors (330*2 sats) from Alice's balance
+	// - Only adding one anchor, but failing to re-add the balance to Alice's balance.
+	//
+	// If this is true, the commitment transaction should be 330 sats greater than our estimate.
+	assert_eq!(fee_amt, expected_fee + 330);
 }

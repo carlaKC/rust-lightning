@@ -21,29 +21,30 @@ fn test_outbound_chans_unlimited() {
 	let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 
 	// Note that create_network connects the nodes together for us
-
+	let node_a = nodes[0].node.get_our_node_id();
+	let node_b = nodes[1].node.get_our_node_id();
 	nodes[0].node.create_channel(nodes[1].node.get_our_node_id(), 100_000, 0, 42, None, None).unwrap();
-	let mut open_channel_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, nodes[1].node.get_our_node_id());
+	let mut open_channel_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, node_b);
 
 	for _ in 0..MAX_UNFUNDED_CHANS_PER_PEER {
 		nodes[1].node.handle_open_channel(nodes[0].node.get_our_node_id(), &open_channel_msg);
-		get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, nodes[0].node.get_our_node_id());
+		get_event_msg!(nodes[1], MessageSendEvent::SendAcceptChannel, node_a);
 		open_channel_msg.common_fields.temporary_channel_id = ChannelId::temporary_from_entropy_source(&nodes[0].keys_manager);
 	}
 
 	// Once we have MAX_UNFUNDED_CHANS_PER_PEER unfunded channels, new inbound channels will be
 	// rejected.
-	nodes[1].node.handle_open_channel(nodes[0].node.get_our_node_id(), &open_channel_msg);
-	assert_eq!(get_err_msg(&nodes[1], &nodes[0].node.get_our_node_id()).channel_id,
+	nodes[1].node.handle_open_channel(node_a, &open_channel_msg);
+	assert_eq!(get_err_msg(&nodes[1], &node_a).channel_id,
 		open_channel_msg.common_fields.temporary_channel_id);
 
 	// but we can still open an outbound channel.
-	nodes[1].node.create_channel(nodes[0].node.get_our_node_id(), 100_000, 0, 42, None, None).unwrap();
-	get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, nodes[0].node.get_our_node_id());
+	nodes[1].node.create_channel(node_a, 100_000, 0, 42, None, None).unwrap();
+	get_event_msg!(nodes[1], MessageSendEvent::SendOpenChannel, node_a);
 
 	// but even with such an outbound channel, additional inbound channels will still fail.
-	nodes[1].node.handle_open_channel(nodes[0].node.get_our_node_id(), &open_channel_msg);
-	assert_eq!(get_err_msg(&nodes[1], &nodes[0].node.get_our_node_id()).channel_id,
+	nodes[1].node.handle_open_channel(node_a, &open_channel_msg);
+	assert_eq!(get_err_msg(&nodes[1], &node_a).channel_id,
 		open_channel_msg.common_fields.temporary_channel_id);
 }
 
@@ -60,17 +61,18 @@ fn test_0conf_limiting() {
 	let nodes = create_network(2, &node_cfgs, &node_chanmgrs);
 
 	// Note that create_network connects the nodes together for us
-
-	nodes[0].node.create_channel(nodes[1].node.get_our_node_id(), 100_000, 0, 42, None, None).unwrap();
-	let mut open_channel_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, nodes[1].node.get_our_node_id());
+	let node_b = nodes[1].node.get_our_node_id();
+	nodes[0].node.create_channel(node_b, 100_000, 0, 42, None, None).unwrap();
+	let mut open_channel_msg = get_event_msg!(nodes[0], MessageSendEvent::SendOpenChannel, node_b);
+	let init_msg = &msgs::Init {
+		features: nodes[0].node.init_features(), networks: None, remote_network_address: None
+	};
 
 	// First, get us up to MAX_UNFUNDED_CHANNEL_PEERS so we can test at the edge
 	for _ in 0..MAX_UNFUNDED_CHANNEL_PEERS - 1 {
 		let random_pk = PublicKey::from_secret_key(&nodes[0].node.secp_ctx,
 			&SecretKey::from_slice(&nodes[1].keys_manager.get_secure_random_bytes()).unwrap());
-		nodes[1].node.peer_connected(random_pk, &msgs::Init {
-			features: nodes[0].node.init_features(), networks: None, remote_network_address: None
-		}, true).unwrap();
+		nodes[1].node.peer_connected(random_pk, init_msg, true).unwrap();
 
 		nodes[1].node.handle_open_channel(random_pk, &open_channel_msg);
 		let events = nodes[1].node.get_and_clear_pending_events();
@@ -87,9 +89,7 @@ fn test_0conf_limiting() {
 	// If we try to accept a channel from another peer non-0conf it will fail.
 	let last_random_pk = PublicKey::from_secret_key(&nodes[0].node.secp_ctx,
 		&SecretKey::from_slice(&nodes[1].keys_manager.get_secure_random_bytes()).unwrap());
-	nodes[1].node.peer_connected(last_random_pk, &msgs::Init {
-		features: nodes[0].node.init_features(), networks: None, remote_network_address: None
-	}, true).unwrap();
+	nodes[1].node.peer_connected(last_random_pk, init_msg, true).unwrap();
 	nodes[1].node.handle_open_channel(last_random_pk, &open_channel_msg);
 	let events = nodes[1].node.get_and_clear_pending_events();
 	match events[0] {

@@ -233,8 +233,14 @@ pub(crate) fn commit_and_htlc_tx_fees_sat(feerate_per_kw: u32, num_accepted_htlc
 	let num_htlcs = num_accepted_htlcs + num_offered_htlcs;
 	let commit_tx_fees_sat = commit_tx_fee_sat(feerate_per_kw, num_htlcs, channel_type_features);
 	let htlc_tx_fees_sat = if !channel_type_features.supports_anchors_zero_fee_htlc_tx() {
-		num_accepted_htlcs as u64 * htlc_success_tx_weight(channel_type_features) * feerate_per_kw as u64 / 1000
-	  + num_offered_htlcs as u64 * htlc_timeout_tx_weight(channel_type_features) * feerate_per_kw as u64 / 1000
+		// Note: rounding is applied to sat/vbyte before multiplying by number of HTLCs.
+		// Previously, we'd multiply the htlc count and sat/vbyte first, which could result in
+		// rounding errors.
+		//
+		// See an example here:
+		// https://play.rust-lang.org/?version=stable&mode=debug&edition=2021&gist=c76a0372abcb4451d5b1d62afe71da69
+		num_accepted_htlcs as u64 * (htlc_success_tx_weight(channel_type_features) * feerate_per_kw as u64 / 1000)
+	  + num_offered_htlcs as u64 * (htlc_timeout_tx_weight(channel_type_features) * feerate_per_kw as u64 / 1000)
 	} else {
 		0
 	};

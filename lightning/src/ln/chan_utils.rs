@@ -864,7 +864,9 @@ pub fn build_htlc_input_witness(
 	local_sig: &Signature, remote_sig: &Signature, preimage: &Option<PaymentPreimage>,
 	redeem_script: &Script, channel_type_features: &ChannelTypeFeatures,
 ) -> Witness {
-	let remote_sighash_type = if channel_type_features.supports_anchors_zero_fee_htlc_tx() {
+	let zero_fee_htlcs = channel_type_features.supports_anchors_zero_fee_htlc_tx()
+		|| channel_type_features.supports_anchor_zero_fee_commitments();
+	let remote_sighash_type = if zero_fee_htlcs {
 		EcdsaSighashType::SinglePlusAnyoneCanPay
 	} else {
 		EcdsaSighashType::All

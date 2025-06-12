@@ -1453,9 +1453,12 @@ impl EcdsaChannelSigner for InMemorySigner {
 		let commitment_txid = built_tx.txid;
 
 		let mut htlc_sigs = Vec::with_capacity(commitment_tx.nondust_htlcs().len());
+		let chan_type = &channel_parameters.channel_type_features;
+		let zero_fee_htlcs = chan_type.supports_anchors_zero_fee_htlc_tx()
+			|| chan_type.supports_anchor_zero_fee_commitments();
+
 		for htlc in commitment_tx.nondust_htlcs() {
 			let holder_selected_contest_delay = channel_parameters.holder_selected_contest_delay;
-			let chan_type = &channel_parameters.channel_type_features;
 			let htlc_tx = chan_utils::build_htlc_transaction(
 				&commitment_txid,
 				commitment_tx.feerate_per_kw(),
@@ -1466,7 +1469,7 @@ impl EcdsaChannelSigner for InMemorySigner {
 				&keys.revocation_key,
 			);
 			let htlc_redeemscript = chan_utils::get_htlc_redeemscript(&htlc, chan_type, &keys);
-			let htlc_sighashtype = if chan_type.supports_anchors_zero_fee_htlc_tx() {
+			let htlc_sighashtype = if zero_fee_htlcs {
 				EcdsaSighashType::SinglePlusAnyoneCanPay
 			} else {
 				EcdsaSighashType::All

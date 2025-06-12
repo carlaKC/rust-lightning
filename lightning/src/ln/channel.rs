@@ -4258,6 +4258,9 @@ where
 		}
 
 		let holder_keys = commitment_data.tx.trust().keys();
+		let zero_fee_htlcs = funding.get_channel_type().supports_anchors_zero_fee_htlc_tx()
+			|| funding.get_channel_type().supports_anchor_zero_fee_commitments();
+
 		for (htlc, counterparty_sig) in commitment_data.tx.nondust_htlcs().iter().zip(msg.htlc_signatures.iter()) {
 			assert!(htlc.transaction_output_index.is_some());
 			let htlc_tx = chan_utils::build_htlc_transaction(&commitment_txid, commitment_data.tx.feerate_per_kw(),
@@ -4265,7 +4268,11 @@ where
 				&holder_keys.broadcaster_delayed_payment_key, &holder_keys.revocation_key);
 
 			let htlc_redeemscript = chan_utils::get_htlc_redeemscript(&htlc, funding.get_channel_type(), &holder_keys);
-			let htlc_sighashtype = if funding.get_channel_type().supports_anchors_zero_fee_htlc_tx() { EcdsaSighashType::SinglePlusAnyoneCanPay } else { EcdsaSighashType::All };
+			let htlc_sighashtype = if zero_fee_htlcs {
+					EcdsaSighashType::SinglePlusAnyoneCanPay
+				} else {
+					EcdsaSighashType::All
+			};
 			let htlc_sighash = hash_to_message!(&sighash::SighashCache::new(&htlc_tx).p2wsh_signature_hash(0, &htlc_redeemscript, htlc.to_bitcoin_amount(), htlc_sighashtype).unwrap()[..]);
 			log_trace!(logger, "Checking HTLC tx signature {} by key {} against tx {} (sighash {}) with redeemscript {} in channel {}.",
 				log_bytes!(counterparty_sig.serialize_compact()[..]), log_bytes!(holder_keys.countersignatory_htlc_key.to_public_key().serialize()),

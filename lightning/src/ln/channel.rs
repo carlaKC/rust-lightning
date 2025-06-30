@@ -11982,12 +11982,6 @@ where
 		let holder_selected_channel_reserve_satoshis = get_v2_channel_reserve_satoshis(
 			channel_value_satoshis, MIN_CHAN_DUST_LIMIT_SATOSHIS);
 
-		// First check the channel type is known, failing before we do anything else if we don't
-		// support this channel type.
-		if msg.common_fields.channel_type.is_none() {
-			return Err(ChannelError::close(format!("Rejecting V2 channel {} missing channel_type",
-				msg.common_fields.temporary_channel_id)))
-		}
 		let channel_type = channel_type_from_open_channel(&msg.common_fields, our_supported_features)?;
 
 		let counterparty_pubkeys = ChannelPublicKeys {

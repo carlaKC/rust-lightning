@@ -3838,12 +3838,10 @@ where
 			return Err(ChannelError::close("Got an accept_channel message at a strange time".to_owned()));
 		}
 
-		if let Some(ty) = &common_fields.channel_type {
-			if ty != funding.get_channel_type() {
-				return Err(ChannelError::close("Channel Type in accept_channel didn't match the one sent in open_channel.".to_owned()));
-			}
-		} else {
-			return Err(ChannelError::close("channel_type assumed to be supported".to_owned()));
+		let channel_type = common_fields.channel_type.as_ref()
+			.ok_or_else(|| ChannelError::close("option_channel_type assumed to be supported".to_owned()))?;
+		if channel_type != funding.get_channel_type() {
+			return Err(ChannelError::close("Channel Type in accept_channel didn't match the one sent in open_channel.".to_owned()));
 		}
 
 		if common_fields.dust_limit_satoshis > 21000000 * 100000000 {
@@ -11538,30 +11536,29 @@ where
 pub(super) fn channel_type_from_open_channel(
 	common_fields: &msgs::CommonOpenChannelFields, our_supported_features: &ChannelTypeFeatures
 ) -> Result<ChannelTypeFeatures, ChannelError> {
-	if let Some(channel_type) = &common_fields.channel_type {
-		if channel_type.supports_any_optional_bits() {
-			return Err(ChannelError::close("Channel Type field contained optional bits - this is not allowed".to_owned()));
-		}
+	let channel_type = common_fields.channel_type.as_ref()
+		.ok_or_else(|| ChannelError::close("option_channel_type assumed to be supported".to_owned()))?;
 
-		// We only support the channel types defined by the `ChannelManager` in
-		// `provided_channel_type_features`. The channel type must always support
-		// `static_remote_key`, either implicitly with `option_zero_fee_commitments`
-		// or explicitly.
-		if !channel_type.requires_static_remote_key() && !channel_type.requires_anchor_zero_fee_commitments() {
-			return Err(ChannelError::close("Channel Type was not understood - we require static remote key".to_owned()));
-		}
-		// Make sure we support all of the features behind the channel type.
-		if channel_type.requires_unknown_bits_from(&our_supported_features) {
-			return Err(ChannelError::close("Channel Type contains unsupported features".to_owned()));
-		}
-		let announce_for_forwarding = if (common_fields.channel_flags & 1) == 1 { true } else { false };
-		if channel_type.requires_scid_privacy() && announce_for_forwarding {
-			return Err(ChannelError::close("SCID Alias/Privacy Channel Type cannot be set on a public channel".to_owned()));
-		}
-		Ok(channel_type.clone())
-	} else {
-		return Err(ChannelError::close("channel_type assumed to be supported".to_owned()));
+	if channel_type.supports_any_optional_bits() {
+		return Err(ChannelError::close("Channel Type field contained optional bits - this is not allowed".to_owned()));
 	}
+
+	// We only support the channel types defined by the `ChannelManager` in
+	// `provided_channel_type_features`. The channel type must always support
+	// `static_remote_key`, either implicitly with `option_zero_fee_commitments`
+	// or explicitly.
+	if !channel_type.requires_static_remote_key() && !channel_type.requires_anchor_zero_fee_commitments() {
+		return Err(ChannelError::close("Channel Type was not understood - we require static remote key".to_owned()));
+	}
+	// Make sure we support all of the features behind the channel type.
+	if channel_type.requires_unknown_bits_from(&our_supported_features) {
+		return Err(ChannelError::close("Channel Type contains unsupported features".to_owned()));
+	}
+	let announce_for_forwarding = if (common_fields.channel_flags & 1) == 1 { true } else { false };
+	if channel_type.requires_scid_privacy() && announce_for_forwarding {
+		return Err(ChannelError::close("SCID Alias/Privacy Channel Type cannot be set on a public channel".to_owned()));
+	}
+	Ok(channel_type.clone())
 }
 
 impl<SP: Deref> InboundV1Channel<SP>

@@ -7223,6 +7223,7 @@ where
 	pub fn maybe_update_chan_fees(&self) {
 		PersistenceNotifierGuard::optionally_notify(self, || {
 			let mut should_persist = NotifyOption::SkipPersistNoEvents;
+			let mut feerate_cache = new_hash_map();
 
 			let per_peer_state = self.per_peer_state.read().unwrap();
 			for (_cp_id, peer_state_mutex) in per_peer_state.iter() {
@@ -7231,10 +7232,11 @@ where
 				for (chan_id, chan) in peer_state.channel_by_id.iter_mut()
 					.filter_map(|(chan_id, chan)| chan.as_funded_mut().map(|chan| (chan_id, chan)))
 				{
-					let new_feerate = selected_commitment_sat_per_1000_weight(
-						&self.fee_estimator, chan.funding.get_channel_type(),
-					);
-					let chan_needs_persist = self.update_channel_fee(chan_id, chan, new_feerate);
+					let channel_type = chan.funding.get_channel_type();
+					let new_feerate = feerate_cache.entry(channel_type.clone()).or_insert(
+						selected_commitment_sat_per_1000_weight(&self.fee_estimator, &channel_type));
+
+					let chan_needs_persist = self.update_channel_fee(chan_id, chan, *new_feerate);
 					if chan_needs_persist == NotifyOption::DoPersist { should_persist = NotifyOption::DoPersist; }
 				}
 			}
@@ -7271,6 +7273,7 @@ where
 			let mut handle_errors: Vec<(Result<(), _>, _)> = Vec::new();
 			let mut timed_out_mpp_htlcs = Vec::new();
 			let mut pending_peers_awaiting_removal = Vec::new();
+			let mut feerate_cache = new_hash_map();
 
 			{
 				let per_peer_state = self.per_peer_state.read().unwrap();
@@ -7282,10 +7285,12 @@ where
 					peer_state.channel_by_id.retain(|chan_id, chan| {
 						match chan.as_funded_mut() {
 							Some(funded_chan) => {
-								let new_feerate = selected_commitment_sat_per_1000_weight(
-									&self.fee_estimator, funded_chan.funding.get_channel_type(),
-								);
-								let chan_needs_persist = self.update_channel_fee(chan_id, funded_chan, new_feerate);
+								let channel_type = funded_chan.funding.get_channel_type();
+								let new_feerate = feerate_cache.entry(channel_type.clone()).or_insert(
+									selected_commitment_sat_per_1000_weight(
+										&self.fee_estimator, &channel_type,
+								));
+								let chan_needs_persist = self.update_channel_fee(chan_id, funded_chan, *new_feerate);
 								if chan_needs_persist == NotifyOption::DoPersist { should_persist = NotifyOption::DoPersist; }
 
 								if let Err(e) = funded_chan.timer_check_closing_negotiation_progress() {

@@ -16961,7 +16961,7 @@ mod tests {
 		expect_and_process_pending_htlcs(&nodes[1], true);
 		let events = nodes[1].node.get_and_clear_pending_events();
 		let fail = HTLCHandlingFailureType::Receive { payment_hash: our_payment_hash };
-		expect_pending_htlcs_forwardable_conditions(events, &[fail]);
+		expect_htlc_failure_conditions(events, &[fail]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -17183,7 +17183,7 @@ mod tests {
 		expect_and_process_pending_htlcs(&nodes[1], true);
 		let events = nodes[1].node.get_and_clear_pending_events();
 		let fail = HTLCHandlingFailureType::Receive { payment_hash };
-		expect_pending_htlcs_forwardable_conditions(events, &[fail]);
+		expect_htlc_failure_conditions(events, &[fail]);
 		nodes[1].node.get_and_clear_pending_events();
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
@@ -17231,7 +17231,7 @@ mod tests {
 		expect_and_process_pending_htlcs(&nodes[1], true);
 		let events = nodes[1].node.get_and_clear_pending_events();
 		let fail = HTLCHandlingFailureType::Receive { payment_hash };
-		expect_pending_htlcs_forwardable_conditions(events, &[fail]);
+		expect_htlc_failure_conditions(events, &[fail]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());
@@ -17280,7 +17280,7 @@ mod tests {
 		expect_and_process_pending_htlcs(&nodes[1], true);
 		let events = nodes[1].node.get_and_clear_pending_events();
 		let fail = HTLCHandlingFailureType::Receive { payment_hash };
-		expect_pending_htlcs_forwardable_conditions(events, &[fail]);
+		expect_htlc_failure_conditions(events, &[fail]);
 		check_added_monitors!(nodes[1], 1);
 		let updates = get_htlc_update_msgs!(nodes[1], nodes[0].node.get_our_node_id());
 		assert!(updates.update_add_htlcs.is_empty());

@@ -751,6 +751,9 @@ impl SentHTLCId {
 				prev_outbound_scid_alias: hop_data.prev_outbound_scid_alias,
 				htlc_id: hop_data.htlc_id,
 			},
+			HTLCSource::TrampolineForward { session_priv, .. } => {
+				Self::TrampolineForward { session_priv: session_priv.secret_bytes() }
+			},
 			HTLCSource::OutboundRoute { session_priv, .. } => {
 				Self::OutboundRoute { session_priv: session_priv.secret_bytes() }
 			},
@@ -784,6 +787,16 @@ mod fuzzy_channelmanager {
 	#[derive(Clone, Debug, PartialEq, Eq)]
 	pub enum HTLCSource {
 		PreviousHopData(HTLCPreviousHopData),
+		TrampolineForward {
+			/// We might be forwarding an incoming payment that was received over MPP, and therefore
+			/// need to store the vector of corresponding `HTLCPreviousHopData` values.
+			previous_hop_data: Vec<HTLCPreviousHopData>,
+			incoming_trampoline_shared_secret: [u8; 32],
+			path: Path,
+			/// In order to decode inter-Trampoline errors, we need to store the session_priv key
+			/// given we're effectively creating new outbound routes.
+			session_priv: SecretKey,
+		},
 		OutboundRoute {
 			path: Path,
 			session_priv: SecretKey,
@@ -845,6 +858,18 @@ impl core::hash::Hash for HTLCSource {
 				payment_id.hash(hasher);
 				first_hop_htlc_msat.hash(hasher);
 				bolt12_invoice.hash(hasher);
+			},
+			HTLCSource::TrampolineForward {
+				previous_hop_data,
+				incoming_trampoline_shared_secret,
+				path,
+				session_priv,
+			} => {
+				2u8.hash(hasher);
+				previous_hop_data.hash(hasher);
+				incoming_trampoline_shared_secret.hash(hasher);
+				path.hash(hasher);
+				session_priv[..].hash(hasher);
 			},
 		}
 	}
@@ -8818,6 +8843,7 @@ impl<
 					None,
 				));
 			},
+			HTLCSource::TrampolineForward { .. } => todo!(),
 		}
 	}
 
@@ -9579,6 +9605,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 					},
 				);
 			},
+			HTLCSource::TrampolineForward { .. } => todo!(),
 		}
 	}
 
@@ -16856,6 +16883,20 @@ impl Readable for HTLCSource {
 				})
 			}
 			1 => Ok(HTLCSource::PreviousHopData(Readable::read(reader)?)),
+			2 => {
+				_init_and_read_len_prefixed_tlv_fields!(reader, {
+					(1, previous_hop_data, required_vec),
+					(3, incoming_trampoline_shared_secret, required),
+					(5, path, required),
+					(7, session_priv, required),
+				});
+				Ok(HTLCSource::TrampolineForward {
+					previous_hop_data: _init_tlv_based_struct_field!(previous_hop_data, required_vec),
+					incoming_trampoline_shared_secret: _init_tlv_based_struct_field!(incoming_trampoline_shared_secret, required),
+					path: _init_tlv_based_struct_field!(path, required),
+					session_priv: _init_tlv_based_struct_field!(session_priv, required),
+				})
+			},
 			_ => Err(DecodeError::UnknownRequiredFeature),
 		}
 	}
@@ -16887,6 +16928,20 @@ impl Writeable for HTLCSource {
 			HTLCSource::PreviousHopData(ref field) => {
 				1u8.write(writer)?;
 				field.write(writer)?;
+			},
+			HTLCSource::TrampolineForward {
+				ref previous_hop_data,
+				incoming_trampoline_shared_secret,
+				ref session_priv,
+				ref path,
+			} => {
+				2u8.write(writer)?;
+				write_tlv_fields!(writer, {
+					(1, *previous_hop_data, required_vec),
+					(3, incoming_trampoline_shared_secret, required),
+					(5, *path, required),
+					(7, session_priv, required),
+				});
 			},
 		}
 		Ok(())
@@ -18679,6 +18734,7 @@ impl<
 								} else { true }
 							});
 						},
+						HTLCSource::TrampolineForward { .. } => todo!(),
 						HTLCSource::OutboundRoute {
 							payment_id,
 							session_priv,
@@ -18738,7 +18794,6 @@ impl<
 									// Note that for channels closed pre-0.1, the latest
 									// update_id is `u64::MAX`.
 									*update_id = update_id.saturating_add(1);
-
 									pending_background_events.push(
 										BackgroundEvent::MonitorUpdateRegeneratedOnStartup {
 											counterparty_node_id: monitor

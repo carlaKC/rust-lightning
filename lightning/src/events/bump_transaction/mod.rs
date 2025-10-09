@@ -407,9 +407,6 @@ where
 {
 	source: W,
 	logger: L,
-	// TODO: Do we care about cleaning this up once the UTXOs have a confirmed spend? We can do so
-	// by checking whether any UTXOs that exist in the map are no longer returned in
-	// `list_confirmed_utxos`.
 	locked_utxos: Mutex<HashMap<OutPoint, ClaimId>>,
 }
 
@@ -537,6 +534,15 @@ where
 	) -> AsyncResult<'a, CoinSelection> {
 		Box::pin(async move {
 			let utxos = self.source.list_confirmed_utxos().await?;
+
+			// Locked utxos that aren't in list_confirmed_utxos have been spent.
+			let confirmed_outpoints: HashSet<OutPoint> =
+				utxos.iter().map(|utxo| utxo.outpoint).collect();
+			self.locked_utxos
+				.lock()
+				.map_err(|_| ())?
+				.retain(|locked_utxo, _| confirmed_outpoints.contains(locked_utxo));
+
 			// TODO: Use fee estimation utils when we upgrade to bitcoin v0.30.0.
 			const BASE_TX_SIZE: u64 = 4 /* version */ + 1 /* input count */ + 1 /* output count */ + 4 /* locktime */;
 			let total_output_size: u64 = must_pay_to

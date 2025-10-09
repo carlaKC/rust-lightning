@@ -14,6 +14,7 @@
 pub mod sync;
 
 use alloc::collections::BTreeMap;
+use bitcoin::absolute::Height;
 use core::ops::Deref;
 
 use crate::chain::chaininterface::{
@@ -542,6 +543,35 @@ where
 				.lock()
 				.map_err(|_| ())?
 				.retain(|locked_utxo, _| confirmed_outpoints.contains(locked_utxo));
+
+			// Create a transaction that we can use for weight estimation. We don't care about
+			// the version or locktime here, as both are just placeholders for constant-length
+			// encoded fields.
+			let tx_for_weight_est = Transaction {
+				version: Version::TWO,
+				lock_time: LockTime::Blocks(Height::ZERO),
+				input: must_spend
+					.iter()
+					.map(|input| TxIn {
+						previous_output: input.outpoint,
+						script_sig: input.previous_utxo.script_pubkey,
+						sequence: Sequence::ZERO,
+						witness: Witness {
+							// TODO: we can't get these from our inputs
+							content: todo!(),
+							witness_elements: todo!(),
+							indices_start: todo!(),
+						},
+					})
+					.collect(),
+				output: must_pay_to
+					.iter()
+					.map(|output| TxOut {
+						value: output.value,
+						script_pubkey: output.script_pubkey.clone(),
+					})
+					.collect(),
+			};
 
 			// TODO: Use fee estimation utils when we upgrade to bitcoin v0.30.0.
 			const BASE_TX_SIZE: u64 = 4 /* version */ + 1 /* input count */ + 1 /* output count */ + 4 /* locktime */;

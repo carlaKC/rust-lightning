@@ -1523,6 +1523,7 @@ fn update_add_msg(
 		skimmed_fee_msat: None,
 		blinding_point,
 		hold_htlc: None,
+		accountable: None,
 	}
 }
 

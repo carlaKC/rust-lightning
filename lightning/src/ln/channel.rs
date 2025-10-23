@@ -9619,6 +9619,7 @@ where
 					skimmed_fee_msat: htlc.skimmed_fee_msat,
 					blinding_point: htlc.blinding_point,
 					hold_htlc: htlc.hold_htlc,
+					accountable: None,
 				});
 			}
 		}

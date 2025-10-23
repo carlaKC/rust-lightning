@@ -429,6 +429,9 @@ pub struct PendingHTLCInfo {
 	/// An experimental field indicating whether our node's reputation would be held accountable
 	/// for the timely resolution of the received HTLC.
 	pub incoming_accountable: Option<u8>,
+	/// An experimental field indicating whether the outgoing node's reputation would be held
+	/// accountable for the timely resolution of the offered HTLC.
+	pub outgoing_accountable: Option<u8>,
 }
 
 #[derive(Clone)] // See FundedChannel::revoke_and_ack for why, tl;dr: Rust bug
@@ -11226,7 +11229,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 						Some(prev_channel_id),
 						Some(payment_hash),
 					);
-					let pending_add = PendingAddHTLCInfo {
+					let mut pending_add = PendingAddHTLCInfo {
 						prev_outbound_scid_alias,
 						prev_counterparty_node_id,
 						prev_funding_outpoint,
@@ -11320,6 +11323,13 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 							},
 						}
 					} else {
+						// Set the value for our outgoing accountable signal to copy the received
+						// incoming value (or just set zero if not present). This point is where we
+						// could introduce an interceptor that provides us with custom accountable
+						// values if desired.
+						pending_add.forward_info.outgoing_accountable =
+							pending_add.forward_info.incoming_accountable.or(Some(0));
+
 						match self.forward_htlcs.lock().unwrap().entry(scid) {
 							hash_map::Entry::Occupied(mut entry) => {
 								entry.get_mut().push(HTLCForwardInfo::AddHTLC(pending_add));
@@ -15770,6 +15780,7 @@ impl_writeable_tlv_based!(PendingHTLCInfo, {
 	(9, incoming_amt_msat, option),
 	(10, skimmed_fee_msat, option),
 	(11, incoming_accountable, option),
+	(13, outgoing_accountable, option),
 });
 
 impl Writeable for HTLCFailureMsg {

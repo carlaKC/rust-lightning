@@ -242,6 +242,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 		outgoing_cltv_value,
 		skimmed_fee_msat: None,
 		incoming_accountable: msg.accountable,
+		outgoing_accountable: None,
 	})
 }
 
@@ -418,6 +419,7 @@ pub(super) fn create_recv_pending_htlc_info(
 		outgoing_cltv_value: onion_cltv_expiry,
 		skimmed_fee_msat: counterparty_skimmed_fee_msat,
 		incoming_accountable,
+		outgoing_accountable: None,
 	})
 }
 

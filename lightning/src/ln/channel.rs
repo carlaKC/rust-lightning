@@ -428,6 +428,7 @@ struct OutboundHTLCOutput {
 	skimmed_fee_msat: Option<u64>,
 	send_timestamp: Option<Duration>,
 	hold_htlc: Option<()>,
+	accountable: Option<u8>,
 }
 
 /// See AwaitingRemoteRevoke ChannelState for more info
@@ -9641,7 +9642,7 @@ where
 					skimmed_fee_msat: htlc.skimmed_fee_msat,
 					blinding_point: htlc.blinding_point,
 					hold_htlc: htlc.hold_htlc,
-					accountable: None,
+					accountable: htlc.accountable,
 				});
 			}
 		}
@@ -12586,6 +12587,7 @@ where
 			skimmed_fee_msat,
 			send_timestamp,
 			hold_htlc: hold_htlc.then(|| ()),
+			accountable,
 		});
 		self.context.next_holder_htlc_id += 1;
 
@@ -14434,6 +14436,7 @@ where
 		let mut pending_outbound_skimmed_fees: Vec<Option<u64>> = Vec::new();
 		let mut pending_outbound_blinding_points: Vec<Option<PublicKey>> = Vec::new();
 		let mut pending_outbound_held_htlc_flags: Vec<Option<()>> = Vec::new();
+		let mut pending_outbound_accountable: Vec<Option<u8>> = Vec::new();
 
 		(self.context.pending_outbound_htlcs.len() as u64).write(writer)?;
 		for htlc in self.context.pending_outbound_htlcs.iter() {
@@ -14477,6 +14480,7 @@ where
 			pending_outbound_skimmed_fees.push(htlc.skimmed_fee_msat);
 			pending_outbound_blinding_points.push(htlc.blinding_point);
 			pending_outbound_held_htlc_flags.push(htlc.hold_htlc);
+			pending_outbound_accountable.push(htlc.accountable);
 		}
 
 		let holding_cell_htlc_update_count = self.context.holding_cell_htlc_updates.len();
@@ -14772,6 +14776,7 @@ where
 			(67, pending_outbound_held_htlc_flags, optional_vec), // Added in 0.2
 			(69, holding_cell_held_htlc_flags, optional_vec), // Added in 0.2
 			(71, holding_cell_accountable_flags, optional_vec), // Added in 0.3
+			(73, pending_outbound_accountable, optional_vec), // Added in 0.3
 		});
 
 		Ok(())
@@ -14921,6 +14926,7 @@ where
 				blinding_point: None,
 				send_timestamp: None,
 				hold_htlc: None,
+				accountable: None,
 			});
 		}
 
@@ -15140,6 +15146,7 @@ where
 
 		let mut pending_outbound_held_htlc_flags_opt: Option<Vec<Option<()>>> = None;
 		let mut holding_cell_held_htlc_flags_opt: Option<Vec<Option<()>>> = None;
+		let mut pending_outbound_accountable_opt: Option<Vec<Option<u8>>> = None;
 		let mut holding_cell_accountable_opt: Option<Vec<Option<u8>>> = None;
 
 		read_tlv_fields!(reader, {
@@ -15189,6 +15196,7 @@ where
 			(67, pending_outbound_held_htlc_flags_opt, optional_vec), // Added in 0.2
 			(69, holding_cell_held_htlc_flags_opt, optional_vec), // Added in 0.2
 			(71, holding_cell_accountable_opt, optional_vec), // Added in 0.3
+			(73, pending_outbound_accountable_opt, optional_vec), // Added in 0.3
 		});
 
 		let holder_signer = signer_provider.derive_channel_signer(channel_keys_id);
@@ -15325,7 +15333,16 @@ where
 				return Err(DecodeError::InvalidValue);
 			}
 		}
-
+		if let Some(held_htlcs) = pending_outbound_accountable_opt {
+			let mut iter = held_htlcs.into_iter();
+			for htlc in pending_outbound_htlcs.iter_mut() {
+				htlc.accountable = iter.next().ok_or(DecodeError::InvalidValue)?;
+			}
+			// We expect all accountable HTLC signals to be consumed above
+			if iter.next().is_some() {
+				return Err(DecodeError::InvalidValue);
+			}
+		}
 		if let Some(attribution_data_list) = removed_htlc_attribution_data {
 			let mut removed_htlcs = pending_inbound_htlcs.iter_mut().filter_map(|status| {
 				if let InboundHTLCState::LocalRemoved(reason) = &mut status.state {
@@ -15907,6 +15924,7 @@ mod tests {
 			blinding_point: None,
 			send_timestamp: None,
 			hold_htlc: None,
+			accountable: None,
 		});
 
 		// Make sure when Node A calculates their local commitment transaction, none of the HTLCs pass
@@ -16362,6 +16380,7 @@ mod tests {
 			blinding_point: None,
 			send_timestamp: None,
 			hold_htlc: None,
+			accountable: None,
 		};
 		let mut pending_outbound_htlcs = vec![dummy_outbound_output.clone(); 10];
 		for (idx, htlc) in pending_outbound_htlcs.iter_mut().enumerate() {
@@ -16714,6 +16733,7 @@ mod tests {
 				blinding_point: None,
 				send_timestamp: None,
 				hold_htlc: None,
+				accountable: None,
 			};
 			out.payment_hash.0 = Sha256::hash(&<Vec<u8>>::from_hex("0202020202020202020202020202020202020202020202020202020202020202").unwrap()).to_byte_array();
 			out
@@ -16730,6 +16750,7 @@ mod tests {
 				blinding_point: None,
 				send_timestamp: None,
 				hold_htlc: None,
+				accountable: None,
 			};
 			out.payment_hash.0 = Sha256::hash(&<Vec<u8>>::from_hex("0303030303030303030303030303030303030303030303030303030303030303").unwrap()).to_byte_array();
 			out
@@ -17144,6 +17165,7 @@ mod tests {
 				blinding_point: None,
 				send_timestamp: None,
 				hold_htlc: None,
+				accountable: None,
 			};
 			out.payment_hash.0 = Sha256::hash(&<Vec<u8>>::from_hex("0505050505050505050505050505050505050505050505050505050505050505").unwrap()).to_byte_array();
 			out
@@ -17160,6 +17182,7 @@ mod tests {
 				blinding_point: None,
 				send_timestamp: None,
 				hold_htlc: None,
+				accountable: None,
 			};
 			out.payment_hash.0 = Sha256::hash(&<Vec<u8>>::from_hex("0505050505050505050505050505050505050505050505050505050505050505").unwrap()).to_byte_array();
 			out

@@ -5333,6 +5333,7 @@ where
 							onion_packet,
 							None,
 							hold_htlc_at_next_hop,
+							Some(0),
 							&self.fee_estimator,
 							&&logger,
 						);
@@ -7424,6 +7425,7 @@ where
 								outgoing_cltv_value,
 								routing,
 								skimmed_fee_msat,
+								incoming_accountable,
 								..
 							},
 						..
@@ -7519,6 +7521,7 @@ where
 						onion_packet.clone(),
 						*skimmed_fee_msat,
 						next_blinding_point,
+						incoming_accountable.or(Some(0)),
 						&self.fee_estimator,
 						&&logger,
 					) {

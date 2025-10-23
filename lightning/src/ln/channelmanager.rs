@@ -448,6 +448,10 @@ pub(super) enum PendingHTLCStatus {
 pub(super) struct PendingAddHTLCInfo {
 	pub(super) forward_info: PendingHTLCInfo,
 
+	/// An experimental field indicating whether the outgoing node's reputation would be held
+	/// accountable for the timely resolution of the offered HTLC.
+	outgoing_accountable: Option<u8>,
+
 	// These fields are produced in `forward_htlcs()` and consumed in
 	// `process_pending_htlc_forwards()` for constructing the
 	// `HTLCSource::PreviousHopData` for failed and forwarded
@@ -7156,6 +7160,7 @@ where
 								incoming_accountable,
 								..
 							},
+						..
 					} = payment;
 					let logger = WithContext::from(
 						&self.logger,
@@ -11226,7 +11231,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 						Some(prev_channel_id),
 						Some(payment_hash),
 					);
-					let pending_add = PendingAddHTLCInfo {
+					let mut pending_add = PendingAddHTLCInfo {
 						prev_outbound_scid_alias,
 						prev_counterparty_node_id,
 						prev_funding_outpoint,
@@ -11234,6 +11239,7 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 						prev_htlc_id,
 						prev_user_channel_id,
 						forward_info,
+						outgoing_accountable: None,
 					};
 					let mut fail_intercepted_htlc = |pending_add: PendingAddHTLCInfo| {
 						let htlc_source =
@@ -11320,6 +11326,13 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 							},
 						}
 					} else {
+						// Set the value for our outgoing accountable signal to copy the received
+						// incoming value (or just set zero if not present). This point is where we
+						// could introduce an interceptor that provides us with custom accountable
+						// values if desired.
+						pending_add.outgoing_accountable =
+							pending_add.forward_info.incoming_accountable.or(Some(0));
+
 						match self.forward_htlcs.lock().unwrap().entry(scid) {
 							hash_map::Entry::Occupied(mut entry) => {
 								entry.get_mut().push(HTLCForwardInfo::AddHTLC(pending_add));
@@ -16036,6 +16049,7 @@ impl_writeable_tlv_based!(PendingAddHTLCInfo, {
 	// filled in, so we can safely unwrap it here.
 	(7, prev_channel_id, (default_value, ChannelId::v1_from_funding_outpoint(prev_funding_outpoint.0.unwrap()))),
 	(9, prev_counterparty_node_id, required),
+	(11, outgoing_accountable, option),
 });
 
 impl Writeable for HTLCForwardInfo {

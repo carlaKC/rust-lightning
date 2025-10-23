@@ -5337,6 +5337,7 @@ where
 							onion_packet,
 							None,
 							hold_htlc_at_next_hop,
+							false, // Not accountable by default for sender.
 							&self.fee_estimator,
 							&&logger,
 						);
@@ -7428,6 +7429,7 @@ where
 								outgoing_cltv_value,
 								routing,
 								skimmed_fee_msat,
+								incoming_accountable,
 								..
 							},
 						..
@@ -7523,6 +7525,9 @@ where
 						onion_packet.clone(),
 						*skimmed_fee_msat,
 						next_blinding_point,
+						// For historical reasons, we use the full range of bits to represent our
+						// binary accountable signal.
+						*incoming_accountable == Some(7),
 						&self.fee_estimator,
 						&&logger,
 					) {

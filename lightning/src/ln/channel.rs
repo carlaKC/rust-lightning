@@ -451,6 +451,7 @@ enum HTLCUpdateAwaitingACK {
 		skimmed_fee_msat: Option<u64>,
 		blinding_point: Option<PublicKey>,
 		hold_htlc: Option<()>,
+		accountable: Option<u8>,
 	},
 	ClaimHTLC {
 		payment_preimage: PaymentPreimage,
@@ -8338,7 +8339,7 @@ where
 						skimmed_fee_msat,
 						blinding_point,
 						hold_htlc,
-						..
+						accountable,
 					} => {
 						match self.send_htlc(
 							amount_msat,
@@ -8350,6 +8351,9 @@ where
 							skimmed_fee_msat,
 							blinding_point,
 							hold_htlc.is_some(),
+							// For historical reasons, we use the full range of bits to represent
+							// our binary accountable signal.
+							accountable == Some(7),
 							fee_estimator,
 							logger,
 						) {
@@ -12486,7 +12490,8 @@ where
 	pub fn queue_add_htlc<F: Deref, L: Deref>(
 		&mut self, amount_msat: u64, payment_hash: PaymentHash, cltv_expiry: u32,
 		source: HTLCSource, onion_routing_packet: msgs::OnionPacket, skimmed_fee_msat: Option<u64>,
-		blinding_point: Option<PublicKey>, fee_estimator: &LowerBoundedFeeEstimator<F>, logger: &L,
+		blinding_point: Option<PublicKey>, accountable: bool,
+		fee_estimator: &LowerBoundedFeeEstimator<F>, logger: &L,
 	) -> Result<(), (LocalHTLCFailureReason, String)>
 	where
 		F::Target: FeeEstimator,
@@ -12503,6 +12508,7 @@ where
 			blinding_point,
 			// This method is only called for forwarded HTLCs, which are never held at the next hop
 			false,
+			accountable,
 			fee_estimator,
 			logger,
 		)
@@ -12534,7 +12540,7 @@ where
 		&mut self, amount_msat: u64, payment_hash: PaymentHash, cltv_expiry: u32,
 		source: HTLCSource, onion_routing_packet: msgs::OnionPacket, mut force_holding_cell: bool,
 		skimmed_fee_msat: Option<u64>, blinding_point: Option<PublicKey>, hold_htlc: bool,
-		fee_estimator: &LowerBoundedFeeEstimator<F>, logger: &L,
+		accountable: bool, fee_estimator: &LowerBoundedFeeEstimator<F>, logger: &L,
 	) -> Result<bool, (LocalHTLCFailureReason, String)>
 	where
 		F::Target: FeeEstimator,
@@ -12605,6 +12611,10 @@ where
 			force_holding_cell = true;
 		}
 
+		// For historical reasons, the experimental signal uses the full range of bits to express
+		// a binary signal. We set a zero value so that it is distinguishable from null.
+		let accountable = Some(if accountable { 7 } else { 0 });
+
 		// Now update local state:
 		if force_holding_cell {
 			self.context.holding_cell_htlc_updates.push(HTLCUpdateAwaitingACK::AddHTLC {
@@ -12616,6 +12626,7 @@ where
 				skimmed_fee_msat,
 				blinding_point,
 				hold_htlc: hold_htlc.then(|| ()),
+				accountable,
 			});
 			return Ok(false);
 		}
@@ -12864,7 +12875,8 @@ where
 	pub fn send_htlc_and_commit<F: Deref, L: Deref>(
 		&mut self, amount_msat: u64, payment_hash: PaymentHash, cltv_expiry: u32,
 		source: HTLCSource, onion_routing_packet: msgs::OnionPacket, skimmed_fee_msat: Option<u64>,
-		hold_htlc: bool, fee_estimator: &LowerBoundedFeeEstimator<F>, logger: &L,
+		hold_htlc: bool, accountable: bool, fee_estimator: &LowerBoundedFeeEstimator<F>,
+		logger: &L,
 	) -> Result<Option<ChannelMonitorUpdate>, ChannelError>
 	where
 		F::Target: FeeEstimator,
@@ -12880,6 +12892,7 @@ where
 			skimmed_fee_msat,
 			None,
 			hold_htlc,
+			accountable,
 			fee_estimator,
 			logger,
 		);
@@ -14544,6 +14557,8 @@ where
 			Vec::with_capacity(holding_cell_htlc_update_count);
 		let mut holding_cell_held_htlc_flags: Vec<Option<()>> =
 			Vec::with_capacity(holding_cell_htlc_update_count);
+		let mut holding_cell_accountable_flags: Vec<Option<u8>> =
+			Vec::with_capacity(holding_cell_htlc_update_count);
 		// Vec of (htlc_id, failure_code, sha256_of_onion)
 		let mut malformed_htlcs: Vec<(u64, u16, [u8; 32])> = Vec::new();
 		(holding_cell_htlc_update_count as u64).write(writer)?;
@@ -14558,6 +14573,7 @@ where
 					blinding_point,
 					skimmed_fee_msat,
 					hold_htlc,
+					accountable,
 				} => {
 					0u8.write(writer)?;
 					amount_msat.write(writer)?;
@@ -14569,6 +14585,7 @@ where
 					holding_cell_skimmed_fees.push(skimmed_fee_msat);
 					holding_cell_blinding_points.push(blinding_point);
 					holding_cell_held_htlc_flags.push(hold_htlc);
+					holding_cell_accountable_flags.push(accountable);
 				},
 				&HTLCUpdateAwaitingACK::ClaimHTLC {
 					ref payment_preimage,
@@ -14823,6 +14840,7 @@ where
 			(65, self.quiescent_action, option), // Added in 0.2
 			(67, pending_outbound_held_htlc_flags, optional_vec), // Added in 0.2
 			(69, holding_cell_held_htlc_flags, optional_vec), // Added in 0.2
+			(71, holding_cell_accountable_flags, optional_vec), // Added in 0.3
 		});
 
 		Ok(())
@@ -14991,6 +15009,7 @@ where
 					skimmed_fee_msat: None,
 					blinding_point: None,
 					hold_htlc: None,
+					accountable: None,
 				},
 				1 => HTLCUpdateAwaitingACK::ClaimHTLC {
 					payment_preimage: Readable::read(reader)?,
@@ -15190,6 +15209,7 @@ where
 
 		let mut pending_outbound_held_htlc_flags_opt: Option<Vec<Option<()>>> = None;
 		let mut holding_cell_held_htlc_flags_opt: Option<Vec<Option<()>>> = None;
+		let mut holding_cell_accountable_opt: Option<Vec<Option<u8>>> = None;
 
 		read_tlv_fields!(reader, {
 			(0, announcement_sigs, option),
@@ -15237,6 +15257,7 @@ where
 			(65, quiescent_action, upgradable_option), // Added in 0.2
 			(67, pending_outbound_held_htlc_flags_opt, optional_vec), // Added in 0.2
 			(69, holding_cell_held_htlc_flags_opt, optional_vec), // Added in 0.2
+			(71, holding_cell_accountable_opt, optional_vec), // Added in 0.3
 		});
 
 		let holder_signer = signer_provider.derive_channel_signer(channel_keys_id);
@@ -15356,6 +15377,19 @@ where
 				}
 			}
 			// We expect all held HTLC flags to be consumed above
+			if iter.next().is_some() {
+				return Err(DecodeError::InvalidValue);
+			}
+		}
+
+		if let Some(accountable_htlcs) = holding_cell_accountable_opt {
+			let mut iter = accountable_htlcs.into_iter();
+			for htlc in holding_cell_htlc_updates.iter_mut() {
+				if let HTLCUpdateAwaitingACK::AddHTLC { ref mut accountable, .. } = htlc {
+					*accountable = iter.next().ok_or(DecodeError::InvalidValue)?;
+				}
+			}
+			// We expect all accountable HTLC signals to be consumed above
 			if iter.next().is_some() {
 				return Err(DecodeError::InvalidValue);
 			}
@@ -16423,6 +16457,7 @@ mod tests {
 			skimmed_fee_msat: None,
 			blinding_point: None,
 			hold_htlc: None,
+			accountable: None,
 		};
 		let dummy_holding_cell_claim_htlc = |attribution_data| HTLCUpdateAwaitingACK::ClaimHTLC {
 			payment_preimage: PaymentPreimage([42; 32]),

@@ -16452,6 +16452,15 @@ mod tests {
 			( $chan: expr, $logger: expr, $secp_ctx: expr, $signer: expr, $holder_pubkeys: expr, $per_commitment_point: expr, $counterparty_sig_hex: expr, $sig_hex: expr, $tx_hex: expr, $channel_type_features: expr, {
 				$( { $htlc_idx: expr, $counterparty_htlc_sig_hex: expr, $htlc_sig_hex: expr, $htlc_tx_hex: expr } ), *
 			} ) => { {
+				let (htlc_sighashtype, num_anchors) = if $channel_type_features.supports_anchor_zero_fee_commitments() {
+					(EcdsaSighashType::SinglePlusAnyoneCanPay, 1)
+				} else if $channel_type_features.supports_anchors_zero_fee_htlc_tx() {
+					// Note: we don't currently allow testing trimming regular anchors in this util.
+					(EcdsaSighashType::SinglePlusAnyoneCanPay, 2)
+				} else {
+					(EcdsaSighashType::All, 0)
+				};
+
 				let commitment_data = $chan.context.build_commitment_transaction(&$chan.funding,
 					0xffffffffffff - 42, &$per_commitment_point, true, false, &$logger);
 				let commitment_tx = commitment_data.tx;
@@ -16501,7 +16510,6 @@ mod tests {
 						$chan.funding.get_counterparty_selected_contest_delay().unwrap(),
 						&htlc, $channel_type_features, &keys.broadcaster_delayed_payment_key, &keys.revocation_key);
 					let htlc_redeemscript = chan_utils::get_htlc_redeemscript(&htlc, $channel_type_features, &keys);
-					let htlc_sighashtype = if $channel_type_features.supports_anchors_zero_fee_htlc_tx() { EcdsaSighashType::SinglePlusAnyoneCanPay } else { EcdsaSighashType::All };
 					let htlc_sighash = Message::from_digest(sighash::SighashCache::new(&htlc_tx).p2wsh_signature_hash(0, &htlc_redeemscript, htlc.to_bitcoin_amount(), htlc_sighashtype).unwrap().as_raw_hash().to_byte_array());
 					assert!($secp_ctx.verify_ecdsa(&htlc_sighash, &remote_signature, &keys.countersignatory_htlc_key.to_public_key()).is_ok(), "verify counterparty htlc sig");
 
@@ -16532,7 +16540,6 @@ mod tests {
 						preimage: preimage.clone(),
 						counterparty_sig: *htlc_counterparty_sig,
 					}, &$secp_ctx).unwrap();
-					let num_anchors = if $channel_type_features.supports_anchors_zero_fee_htlc_tx() { 2 } else { 0 };
 					assert_eq!(htlc.transaction_output_index, Some($htlc_idx + num_anchors), "output index");
 
 					let signature = Signature::from_der(&<Vec<u8>>::from_hex($htlc_sig_hex).unwrap()[..]).unwrap();

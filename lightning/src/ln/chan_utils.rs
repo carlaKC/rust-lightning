@@ -11,6 +11,7 @@
 //! largely of interest for those implementing the traits on [`crate::sign`] by hand.
 
 use bitcoin::amount::Amount;
+use bitcoin::hex::FromHex;
 use bitcoin::opcodes;
 use bitcoin::script::{Builder, Script, ScriptBuf};
 use bitcoin::sighash;
@@ -1851,8 +1852,11 @@ impl CommitmentTransaction {
 		}
 
 		if to_broadcaster_value_sat > Amount::ZERO {
+			// TODO: remove hardcoding of pubkey once we have basepoint to derive it from.
+			let hardcoded_key = PublicKey::from_slice(&<Vec<u8>>::from_hex("03e1ea1b8f5e4cae2dbac454a341ad5c3323b5827054b7e8b0497600010b31f860").unwrap()[..]).unwrap();
 			let redeem_script = get_revokeable_redeemscript(
-				&keys.revocation_key,
+				// &keys.revocation_key, TODO: put back
+				&RevocationKey(hardcoded_key),
 				contest_delay,
 				&keys.broadcaster_delayed_payment_key,
 			);

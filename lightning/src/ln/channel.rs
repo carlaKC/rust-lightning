@@ -16452,15 +16452,6 @@ mod tests {
 			( $chan: expr, $logger: expr, $secp_ctx: expr, $signer: expr, $holder_pubkeys: expr, $per_commitment_point: expr, $counterparty_sig_hex: expr, $sig_hex: expr, $tx_hex: expr, $channel_type_features: expr, {
 				$( { $htlc_idx: expr, $counterparty_htlc_sig_hex: expr, $htlc_sig_hex: expr, $htlc_tx_hex: expr } ), *
 			} ) => { {
-				let (htlc_sighashtype, num_anchors) = if $channel_type_features.supports_anchor_zero_fee_commitments() {
-					(EcdsaSighashType::SinglePlusAnyoneCanPay, 1)
-				} else if $channel_type_features.supports_anchors_zero_fee_htlc_tx() {
-					// Note: we don't currently allow testing trimming regular anchors in this util.
-					(EcdsaSighashType::SinglePlusAnyoneCanPay, 2)
-				} else {
-					(EcdsaSighashType::All, 0)
-				};
-
 				let commitment_data = $chan.context.build_commitment_transaction(&$chan.funding,
 					0xffffffffffff - 42, &$per_commitment_point, true, false, &$logger);
 				let commitment_tx = commitment_data.tx;
@@ -16501,6 +16492,15 @@ mod tests {
 				let mut htlc_counterparty_sig_iter = holder_commitment_tx.counterparty_htlc_sigs.iter();
 
 				$({
+					let (htlc_sighashtype, num_anchors) = if $channel_type_features.supports_anchor_zero_fee_commitments() {
+						(EcdsaSighashType::SinglePlusAnyoneCanPay, 1)
+					} else if $channel_type_features.supports_anchors_zero_fee_htlc_tx() {
+						// Note: we don't currently allow testing trimming regular anchors in this util.
+						(EcdsaSighashType::SinglePlusAnyoneCanPay, 2)
+					} else {
+						(EcdsaSighashType::All, 0)
+					};
+
 					log_trace!($logger, "verifying htlc {}", $htlc_idx);
 					let remote_signature = Signature::from_der(&<Vec<u8>>::from_hex($counterparty_htlc_sig_hex).unwrap()[..]).unwrap();
 
@@ -17194,6 +17194,174 @@ mod tests {
 		                  "3045022100f2cd35e385b9b7e15b92a5d78d120b6b2c5af4e974bc01e884c5facb3bb5966c0220706e0506477ce809a40022d6de8e041e9ef13136c45abee9c36f58a01fdb188b",
 		                  "020000000001013d060d0305c9616eaabc21d41fae85bcb5477b5d7f1c92aa429cf15339bbe1c40400000000010000000188130000000000002200204adb4e2f00643db396dd120d4e7dc17625f5f2c11a40d857accc862d6b7dd80e0500483045022100bd206b420c495f3aa714d3ea4766cbe95441deacb5d2f737f1913349aee7c2ae02200249d2c950dd3b15326bf378ae5d2b871d33d6737f5d70735f3de8383140f2a183483045022100f2cd35e385b9b7e15b92a5d78d120b6b2c5af4e974bc01e884c5facb3bb5966c0220706e0506477ce809a40022d6de8e041e9ef13136c45abee9c36f58a01fdb188b01008876a91414011f7254d96b819c76986c277d115efce6f7b58763ac67210394854aa6eab5b2a8122cc726e9dded053a2184d88256816826d6231c068d4a5b7c820120876475527c21030d417a46946384f88d5f3337267c5e579765875dc4daca813e21734b140639e752ae67a9142002cc93ebefbb1b73f0af055dcc27a0b504ad7688ac6851b27568fa010000" }
 		} );
+	}
+
+	#[cfg(ldk_test_vectors)]
+	fn secret_from_hex(hex: &str) -> SecretKey {
+		SecretKey::from_slice(&<Vec<u8>>::from_hex(hex).unwrap()[..]).unwrap()
+	}
+
+	#[cfg(ldk_test_vectors)]
+	fn pubkey_from_hex(hex: &str) -> PublicKey {
+		PublicKey::from_slice(&<Vec<u8>>::from_hex(hex).unwrap()[..]).unwrap()
+	}
+
+	// Test vectors from bolt03/zero_fee_commitments.json
+	#[cfg(ldk_test_vectors)]
+	#[test]
+	fn zero_fee_commitment_test_vectors() {
+		use crate::chain::transaction::OutPoint;
+		use crate::ln::chan_utils::{
+			CounterpartyChannelTransactionParameters, HolderCommitmentTransaction,
+		};
+
+		use crate::ln::channel::HTLCOutputInCommitment;
+		use crate::sign::ecdsa::EcdsaChannelSigner;
+		use crate::sync::Arc;
+		use crate::types::features::ChannelTypeFeatures;
+		use crate::util::config::UserConfig;
+		use crate::util::logger::Logger;
+		use bitcoin::consensus::encode::serialize;
+		use bitcoin::hash_types::Txid;
+		use bitcoin::hex::{DisplayHex, FromHex};
+		use bitcoin::secp256k1::Secp256k1;
+		use core::str::FromStr;
+
+		let feeest = TestFeeEstimator::new(250); // Fee doesn't matter
+		let logger: Arc<dyn Logger> = Arc::new(TestLogger::new());
+		let secp_ctx = Secp256k1::new();
+
+		// local_funding_priv
+		let alice_funding_privkey =
+			secret_from_hex("8f567cb6382507019349a47623902aa65d7a142ac85462eeb63dc11799ac2bb9");
+		// local_payment_basepoint_secret
+		let alice_payment_basepoint_secret =
+			secret_from_hex("94f29d20a225ea2f7093331ba0f0f28a9382d8ed08e1fd121329925cd0c01b6d");
+		// local_delayed_payment_basepoint_secret
+		let alice_delayed_payment_basepoint_secret =
+			secret_from_hex("e9d4e1935bf16e948d76ad007baf0646df023af38f41bcf2c8799336949d291e");
+		// local_htlc_basepoint_secret
+		let alice_htlc_basepoint_secret =
+			secret_from_hex("f699038ef4f95b6b16b22a5c04fcb3c508d68d02cd2f86cf197e0fac451681b0");
+		// Not set in test vectors, not required because we're signing Alice's commitment.
+		let alice_revocation_base_secret =
+			secret_from_hex("1111111111111111111111111111111111111111111111111111111111111111");
+
+		let alice_signer = InMemorySigner::new(
+			alice_funding_privkey,
+			alice_revocation_base_secret,
+			alice_payment_basepoint_secret,
+			alice_payment_basepoint_secret,
+			true,
+			alice_delayed_payment_basepoint_secret,
+			alice_htlc_basepoint_secret,
+			// Not provided in test vectors.
+			[0xff; 32],
+			[0; 32],
+			[0; 32],
+		);
+		let alice_keys_provider = Keys { signer: alice_signer.clone() };
+		let alice_pubkeys = alice_signer.pubkeys(&secp_ctx);
+
+		// remote_funding_priv
+		let bob_funding_privkey =
+			secret_from_hex("4d22d96f0c0ccecffee4554d20ed43e51235917508ee292d281235bb7ebe0e3e");
+		// remote_payment_basepoint_secret
+		let bob_payment_basepoint_secret =
+			secret_from_hex("580bff39085f3a6ae8b1f32905e67366c522ea8f2418391145b2e98f1a7cb3f2");
+		// remote_htlc_basepoint_secret
+		let bob_htlc_basepoint_secret =
+			secret_from_hex("32df9c4dd46ab6210e74e81e15282106f8db883f45674eabb3324166c6513062");
+		// Not set in test vectors, overridden later.
+		let bob_revocation_base_secret =
+			secret_from_hex("2222222222222222222222222222222222222222222222222222222222222222");
+		let bob_delayed_payment_basepoint_secret =
+			secret_from_hex("2222222222222222222222222222222222222222222222222222222222222222");
+
+		let bob_signer = InMemorySigner::new(
+			bob_funding_privkey,
+			bob_revocation_base_secret,
+			bob_payment_basepoint_secret,
+			bob_payment_basepoint_secret,
+			true,
+			bob_delayed_payment_basepoint_secret,
+			bob_htlc_basepoint_secret,
+			// Not provided in test vectors.
+			[0xff; 32],
+			[0; 32],
+			[0; 32],
+		);
+
+		// The test vectors only provide the revocation_pubkey (not its basepoint) so we override
+		// it in bob's pubkeys.
+		//
+		// TODO: set bob_pubkeys.revocation_basepoint once added to test vectors.
+		let bob_pubkeys = bob_signer.pubkeys(&secp_ctx);
+		let _revocation_pubkey =
+			pubkey_from_hex("03e1ea1b8f5e4cae2dbac454a341ad5c3323b5827054b7e8b0497600010b31f860");
+
+		// Node id for alice and bob doesn't matter to our test vectors.
+		let bob_node_id = crate::util::test_utils::pubkey(2);
+		let mut config = UserConfig::default();
+		config.manually_accept_inbound_channels = true;
+		config.channel_handshake_config.negotiate_anchor_zero_fee_commitments = true;
+
+		let mut chan = OutboundV1Channel::<&Keys>::new(
+			&LowerBoundedFeeEstimator::new(&feeest),
+			&&alice_keys_provider,
+			&&alice_keys_provider,
+			bob_node_id,
+			&crate::ln::channelmanager::provided_init_features(&config),
+			// funding_amount_satoshis
+			10_000_000,
+			0,
+			0,
+			&config,
+			0,
+			0,
+			None,
+			&*logger,
+		)
+		.unwrap();
+
+		// Zero value reserve makes balances easier to reason about.
+		chan.funding.counterparty_selected_channel_reserve_satoshis = Some(0);
+		chan.funding.holder_selected_channel_reserve_satoshis = 0;
+
+		// funding_txid, funding_index
+		let funding_txid_str = "4b70a2ee47b3005a6316ff87055e94c6b3d433d0fd3b384c9ecf7813843c1eae";
+		let funding_info = OutPoint { txid: Txid::from_str(funding_txid_str).unwrap(), index: 1 };
+
+		// Must override alice's keys because we use a fixed revocation_basepoint.
+		chan.funding.channel_transaction_parameters.holder_pubkeys = alice_pubkeys.clone();
+		chan.funding.channel_transaction_parameters.counterparty_parameters =
+			Some(CounterpartyChannelTransactionParameters {
+				pubkeys: bob_pubkeys.clone(),
+				// to_self_delay
+				selected_contest_delay: 720,
+			});
+		chan.funding.channel_transaction_parameters.funding_outpoint = Some(funding_info);
+		chan.funding.channel_transaction_parameters.channel_type_features =
+			ChannelTypeFeatures::anchors_zero_fee_commitments();
+
+		// per_commitment_point
+		let per_commitment_point =
+			pubkey_from_hex("0275d12130c276b4274358a328901f8fc47e6c72629102e4b46c9f27dd2c1dda98");
+
+		macro_rules! test_commitment_with_zero_fee {
+			( $counterparty_sig_hex: expr, $sig_hex: expr, $tx_hex: expr, $($remain:tt)* ) => {
+				chan.funding.channel_transaction_parameters.channel_type_features = ChannelTypeFeatures::anchors_zero_fee_commitments();
+				test_commitment_common!(chan, logger, secp_ctx, alice_signer, alice_pubkeys, per_commitment_point,
+				$counterparty_sig_hex, $sig_hex, $tx_hex, &ChannelTypeFeatures::anchors_zero_fee_commitments(), $($remain)*);
+			};
+		}
+
+		// Commitment transaction without HTLCs, both outputs untrimmed
+		chan.funding.value_to_self_msat = 8000000000;
+		test_commitment_with_zero_fee!(
+			"3045022100a4bd24af88ce08bb5d1e4ada8efbd4c9cfaf89f11d819f2e6710751ddd9b5007022029354568b5591e9a44c064e81b06125f3d9692bc1e4aa60975dc6b6565adeae7",
+			"3045022100b43d3636d3a7ba930c3e8a76a6679ed42cb3980bdaa87109fdbfc2e0267675ab0220481276e51abf493276e7a59cee499d9d457f6a4d85dc3ffabac12101ca993b09",
+			"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef800300000000000000000451024e7380841e0000000000160014f2123f1a4b67887f2e5f02eda73e6327010152ea00127a0000000000220020e3dd42e4e173fb30a45b6ec19fbef1a5e5c148d86ec5d10207ddc55816df52370400483045022100a4bd24af88ce08bb5d1e4ada8efbd4c9cfaf89f11d819f2e6710751ddd9b5007022029354568b5591e9a44c064e81b06125f3d9692bc1e4aa60975dc6b6565adeae701483045022100b43d3636d3a7ba930c3e8a76a6679ed42cb3980bdaa87109fdbfc2e0267675ab0220481276e51abf493276e7a59cee499d9d457f6a4d85dc3ffabac12101ca993b0901475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {});
 	}
 
 	#[test]

@@ -139,6 +139,7 @@ enum FeeUpdateState {
 	Outbound,
 }
 
+#[cfg_attr(ldk_test_vectors, derive(Clone))]
 enum InboundHTLCRemovalReason {
 	FailRelay(msgs::OnionErrorPacket),
 	FailMalformed(([u8; 32], u16)),
@@ -169,6 +170,7 @@ impl_writeable_tlv_based_enum!(InboundHTLCResolution,
 	},
 );
 
+#[cfg_attr(ldk_test_vectors, derive(Clone))]
 enum InboundHTLCState {
 	/// Offered by remote, to be included in next local commitment tx. I.e., the remote sent an
 	/// update_add_htlc message for this HTLC.
@@ -296,6 +298,7 @@ impl InboundHTLCState {
 	}
 }
 
+#[cfg_attr(ldk_test_vectors, derive(Clone))]
 struct InboundHTLCOutput {
 	htlc_id: u64,
 	amount_msat: u64,
@@ -17206,6 +17209,11 @@ mod tests {
 		PublicKey::from_slice(&<Vec<u8>>::from_hex(hex).unwrap()[..]).unwrap()
 	}
 
+	#[cfg(ldk_test_vectors)]
+	fn payment_hash_from_hex(hash: &str) -> PaymentHash {
+		PaymentHash(Sha256::hash(&<Vec<u8>>::from_hex(hash).unwrap()).to_byte_array())
+	}
+
 	// Test vectors from bolt03/zero_fee_commitments.json
 	#[cfg(ldk_test_vectors)]
 	#[test]
@@ -17376,6 +17384,61 @@ mod tests {
         "304402204042ce57689bb7e52af7fb9ec28d6610674ce00e5e438bb1119acfb91aad6386022065de45c4fe52d86249d80397f2c85e143550cb14b3de0cd1e6a54d0622a2bbd4",
         "30450221009fb4e444e9fe2d7db0f867704745c8ea2e4e1018b5986fd8cb9d9facdc1bb1be02202d6589a20ea8a8e3594eac3c99bad523139a36e313a66c6302e619786cb42396",
 		"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef8002f0000000000000000451024e73706f980000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a040047304402204042ce57689bb7e52af7fb9ec28d6610674ce00e5e438bb1119acfb91aad6386022065de45c4fe52d86249d80397f2c85e143550cb14b3de0cd1e6a54d0622a2bbd4014830450221009fb4e444e9fe2d7db0f867704745c8ea2e4e1018b5986fd8cb9d9facdc1bb1be02202d6589a20ea8a8e3594eac3c99bad523139a36e313a66c6302e619786cb4239601475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {});
+
+		// Commitment transaction with all HTLCs above dust limit
+		chan.context.holder_dust_limit_satoshis = 5000;
+		chan.funding.value_to_self_msat = 7925000000;
+
+		// TODO: do not add clone to InboundHTLCOutput (?) because we need a few attrs
+		let mut base_htlc_in = InboundHTLCOutput {
+			htlc_id: 1,
+			amount_msat: 5000000,
+			cltv_expiry: 920150,
+			payment_hash: payment_hash_from_hex(
+				"23877c9093799487a8d49c7d6aaff7e06b9831c547400605252e7b07f7ae638a",
+			),
+			state: InboundHTLCState::Committed,
+		};
+		chan.context.pending_inbound_htlcs.push(base_htlc_in.clone());
+		base_htlc_in.htlc_id = 2;
+		chan.context.pending_inbound_htlcs.push(base_htlc_in.clone());
+
+		base_htlc_in.htlc_id = 5;
+		chan.context.pending_inbound_htlcs.push(base_htlc_in);
+
+		let mut base_htlc_out = OutboundHTLCOutput {
+			htlc_id: 5,
+			amount_msat: 25000000,
+			cltv_expiry: 920141,
+			payment_hash: payment_hash_from_hex(
+				"72c9386ba5a9d97b821d855930236d39c48dab5b1c2efe9ada44e2fbadcff983",
+			),
+			state: OutboundHTLCState::Committed,
+			source: HTLCSource::dummy(),
+			skimmed_fee_msat: None,
+			blinding_point: None,
+			send_timestamp: None,
+			hold_htlc: None,
+		};
+		chan.context.pending_outbound_htlcs.push(base_htlc_out.clone());
+
+		base_htlc_out.htlc_id = 8;
+		base_htlc_out.payment_hash = payment_hash_from_hex(
+			"10b879729e8ddd44f2cfcf3cad6d62be535ca74e293c5ed4a59bd0dcbdad7ca1",
+		);
+		chan.context.pending_outbound_htlcs.push(base_htlc_out.clone());
+
+		base_htlc_out.htlc_id = 13;
+		base_htlc_out.payment_hash = payment_hash_from_hex(
+			"72c9386ba5a9d97b821d855930236d39c48dab5b1c2efe9ada44e2fbadcff983",
+		);
+		chan.context.pending_outbound_htlcs.push(base_htlc_out.clone());
+
+		test_commitment_with_zero_fee!(
+			"304402205f86a2fefa97ee900388ec6c6a0b1eddcd2f9116d5901b25183b10d070dc3ab802200597ae547a35ee54a0415e84d58cb26bec24ead5f51302c8b670fdf05aca9b9e",
+			"3045022100a3059eb092cb428c4b38d83eb656467bc351da408e9fd6795e6b2a98d2d6feb402206b74f5992ad9a37168b5a7c0f090c3f3f843ebc38a2027b2237607ee7fe393d2",
+		"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef800900000000000000000451024e73881300000000000022002047dbad55e08db8844568542ff324355a5855ab9b86b655eee445b12771dd6a54881300000000000022002047dbad55e08db8844568542ff324355a5855ab9b86b655eee445b12771dd6a54881300000000000022002047dbad55e08db8844568542ff324355a5855ab9b86b655eee445b12771dd6a54a861000000000000220020298be86c17a6b74314397ecff7ab27d0d524e863ff27cc956a338964ba8db779a861000000000000220020298be86c17a6b74314397ecff7ab27d0d524e863ff27cc956a338964ba8db779a8610000000000002200209ba782c0e6b02426a618488ee84d5aa2e6cd887303e625e32378be0c332af012e8491e0000000000160014f2123f1a4b67887f2e5f02eda73e6327010152ea08ed780000000000220020e3dd42e4e173fb30a45b6ec19fbef1a5e5c148d86ec5d10207ddc55816df5237040047304402205f86a2fefa97ee900388ec6c6a0b1eddcd2f9116d5901b25183b10d070dc3ab802200597ae547a35ee54a0415e84d58cb26bec24ead5f51302c8b670fdf05aca9b9e01483045022100a3059eb092cb428c4b38d83eb656467bc351da408e9fd6795e6b2a98d2d6feb402206b74f5992ad9a37168b5a7c0f090c3f3f843ebc38a2027b2237607ee7fe393d201475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {} // TODO: add htlc sigs!
+		);
 	}
 
 	#[test]

@@ -16514,7 +16514,7 @@ mod tests {
 						&htlc, $channel_type_features, &keys.broadcaster_delayed_payment_key, &keys.revocation_key);
 					let htlc_redeemscript = chan_utils::get_htlc_redeemscript(&htlc, $channel_type_features, &keys);
 					let htlc_sighash = Message::from_digest(sighash::SighashCache::new(&htlc_tx).p2wsh_signature_hash(0, &htlc_redeemscript, htlc.to_bitcoin_amount(), htlc_sighashtype).unwrap().as_raw_hash().to_byte_array());
-					assert!($secp_ctx.verify_ecdsa(&htlc_sighash, &remote_signature, &keys.countersignatory_htlc_key.to_public_key()).is_ok(), "verify counterparty htlc sig");
+					assert!($secp_ctx.verify_ecdsa(&htlc_sighash, &remote_signature, &keys.countersignatory_htlc_key.to_public_key()).is_ok(), "verify counterparty htlc sig: {}", htlc_sighashtype);
 
 					// Only HTLC success transactions for received htlcs should have a preimage supplied.
 					assert_eq!(htlc.offered, $preimage.is_none(), "htlc is offered: {}, with preimage: {:?}", htlc.offered, $preimage);
@@ -17449,6 +17449,96 @@ mod tests {
 				"304402207559852cd036af82658949c28e4922f7351756616f8d04703e8060889b4b484e022050d997e1684826dc61bf0d88d9d08c01b8fcf67958ac7a177c320a1a70305fb0",
 				"03000000000101c3b4fad51418c874498af12060d49477c154845040e3584104ae641c542c013506000000000000000001a861000000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a0500473044022061b73271a1b6b5a1bd8e15c58b08320c72da0a1db19493abbfc6f74b5fa80c2c022030ff309d3413b9661fc8f8f2b5fd14bc733c239cc7ba8b971fd562263e62bf3b8347304402207559852cd036af82658949c28e4922f7351756616f8d04703e8060889b4b484e022050d997e1684826dc61bf0d88d9d08c01b8fcf67958ac7a177c320a1a70305fb001008576a914ef8968bbfe34ad740642784d7b1efaebfd5b23ec8763ac672103d8507a026fb30bcd48ee9c765c7346470d0d397661d43dd2eb601f661ab92a0b7c820120876475527c2103c26117339025855b87deda5e138d438b2098881a5e6f81f72a60310faef473c652ae67a914488ed834d26f1a1dc5e3428e1e1a214f743e6a2488ac68684d0a0e00", None::<PaymentPreimage> }
 			});
+
+		// Commitment transaction with dust HTLCs below maximum anchor amount
+		chan.context.holder_dust_limit_satoshis = 1000;
+		chan.funding.value_to_self_msat = 8000000000;
+
+		let htlc_0_in_preimage = PaymentPreimage(
+			<Vec<u8>>::from_hex("d3ad493d19860e4744491cf0795c0bc96a8e2a49ebb30afadae7a7d077aa93b2")
+				.unwrap()
+				.try_into()
+				.unwrap(),
+		);
+		let htlc_0_in_hash = PaymentHash::from(htlc_0_in_preimage);
+		assert_eq!(
+			payment_hash_from_hex(
+				"ffa4f37b6d7dc03fecaaed8d36ebbea6d199e820e386e4549a69ce733f39f29f",
+			),
+			htlc_0_in_hash,
+			"test vector hash does not match ours",
+		);
+
+		let htlc_0_in = InboundHTLCOutput {
+			htlc_id: 0,
+			amount_msat: 100000,
+			cltv_expiry: 920125,
+			payment_hash: htlc_0_in_hash,
+			state: InboundHTLCState::Committed,
+		};
+
+		let mut htlc_1_in = htlc_0_in.clone();
+		let htlc_1_in_preimage = PaymentPreimage(
+			<Vec<u8>>::from_hex("5591b96c0a6a03f51c27bfa658149260bd2fe5e2ce83130ce50d0229a3a947c5")
+				.unwrap()
+				.try_into()
+				.unwrap(),
+		);
+		let htlc_1_in_hash = PaymentHash::from(htlc_1_in_preimage);
+		assert_eq!(
+			payment_hash_from_hex(
+				"72c9386ba5a9d97b821d855930236d39c48dab5b1c2efe9ada44e2fbadcff983",
+			),
+			htlc_1_in_hash,
+			"test vector hash does not match ours",
+		);
+		htlc_1_in.htlc_id = 1;
+		htlc_1_in.amount_msat = 49900000;
+		htlc_1_in.payment_hash = htlc_1_in_hash;
+		chan.context.pending_inbound_htlcs = vec![htlc_0_in, htlc_1_in];
+
+		let htlc_0_out = OutboundHTLCOutput {
+			htlc_id: 0,
+			amount_msat: 10000000,
+			cltv_expiry: 920140,
+			payment_hash: payment_hash_from_hex(
+				"29a74a69c5941d402838f7e1a95c2b2ec534d79524b2582f48df7bc519ebaecf",
+			),
+			state: OutboundHTLCState::Committed,
+			source: HTLCSource::dummy(),
+			skimmed_fee_msat: None,
+			blinding_point: None,
+			send_timestamp: None,
+			hold_htlc: None,
+		};
+
+		let mut htlc_1_out = htlc_0_out.clone();
+		htlc_1_out.htlc_id = 1;
+		htlc_1_out.amount_msat = 130000;
+
+		let mut htlc_2_out = htlc_0_out.clone();
+		htlc_2_out.htlc_id = 2;
+
+		println!("CKC starting problem case");
+		chan.context.pending_outbound_htlcs = vec![htlc_0_out, htlc_1_out, htlc_2_out];
+		test_commitment_with_zero_fee!(
+		"3045022100cb7b6ae16b80c1ad74baea6f37be3581ca60915da75a03be3b377493f3359cc302203b591047f669cce31215c8a5a6039d5fd8dbfd8d6b53af39a619e6541d6bcf31",
+		"3045022100a661444a0800fe5e8bf9ecdef3631610e834485503b8e58d64d08ed5e88ebb2d0220248944d134cadf36cef90d05785ece9432727e81f0f66958a903baa0d69061cd",
+		"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef8006e6000000000000000451024e73102700000000000022002081cd2904fc5581e6459d9375384af1223e6bd4fd112f3505e87b81e622a48cb7102700000000000022002081cd2904fc5581e6459d9375384af1223e6bd4fd112f3505e87b81e622a48cb7ecc20000000000002200207c2edfefe2690c02efde0c461b8a9283ed2a68968109306be4cb5fa848bd7a7630c11d0000000000160014f2123f1a4b67887f2e5f02eda73e6327010152ea5ec3790000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a0400483045022100cb7b6ae16b80c1ad74baea6f37be3581ca60915da75a03be3b377493f3359cc302203b591047f669cce31215c8a5a6039d5fd8dbfd8d6b53af39a619e6541d6bcf3101483045022100a661444a0800fe5e8bf9ecdef3631610e834485503b8e58d64d08ed5e88ebb2d0220248944d134cadf36cef90d05785ece9432727e81f0f66958a903baa0d69061cd01475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {
+			{0,
+				"304402200f60ba0673e03a25cd8ab2f2d8fe4e0bc3ac7ffafe932e7a76afb3be7189b4f50220541a02e557d7ff2ccf0f5be4fa22291d07ecf67d8666dffba55e76ecbb5b9bf9",
+				"3045022100bbafdb3eeb4ab737859798753e0685f203294b6225c1300c9db6867a6f5fde180220769ca281abe51e93d707262ab3f45c54f5ec0ad3529836de0536b24e635e1c9f",
+				"03000000000101d8211cfec4c28b189edcf7b12b739bfbc0f77e44cc6fab67e50fa23cc78481c503000000000000000001ecc2000000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a0500483045022100bbafdb3eeb4ab737859798753e0685f203294b6225c1300c9db6867a6f5fde180220769ca281abe51e93d707262ab3f45c54f5ec0ad3529836de0536b24e635e1c9f8347304402200f60ba0673e03a25cd8ab2f2d8fe4e0bc3ac7ffafe932e7a76afb3be7189b4f50220541a02e557d7ff2ccf0f5be4fa22291d07ecf67d8666dffba55e76ecbb5b9bf901205591b96c0a6a03f51c27bfa658149260bd2fe5e2ce83130ce50d0229a3a947c58b76a914ef8968bbfe34ad740642784d7b1efaebfd5b23ec8763ac672103d8507a026fb30bcd48ee9c765c7346470d0d397661d43dd2eb601f661ab92a0b7c8201208763a914488ed834d26f1a1dc5e3428e1e1a214f743e6a2488527c2103c26117339025855b87deda5e138d438b2098881a5e6f81f72a60310faef473c652ae6775033d0a0eb175ac686800000000",
+				Some(htlc_1_in_preimage) },
+			{1,
+				"3045022100c04dd0b08fd50bfc921de2a5d09840aab97b116e95ffd09cc11470404280be1202204aee1cd187f0074c5b80bae98981d232168daba5bde67adc7539b1a55a5a6709",
+				"30450221009beeb028f6de6f925a986f3aaac7931bd46779b5a2dc8e82ae0509cf0174468002205a2761d34b276752f7f6e62c013c9509104a831df1f4b91a692bb8ad48285d31",
+				"03000000000101d8211cfec4c28b189edcf7b12b739bfbc0f77e44cc6fab67e50fa23cc78481c5010000000000000000011027000000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a05004830450221009beeb028f6de6f925a986f3aaac7931bd46779b5a2dc8e82ae0509cf0174468002205a2761d34b276752f7f6e62c013c9509104a831df1f4b91a692bb8ad48285d3183483045022100c04dd0b08fd50bfc921de2a5d09840aab97b116e95ffd09cc11470404280be1202204aee1cd187f0074c5b80bae98981d232168daba5bde67adc7539b1a55a5a670901008576a914ef8968bbfe34ad740642784d7b1efaebfd5b23ec8763ac672103d8507a026fb30bcd48ee9c765c7346470d0d397661d43dd2eb601f661ab92a0b7c820120876475527c2103c26117339025855b87deda5e138d438b2098881a5e6f81f72a60310faef473c652ae67a91489baf9f76be304292b0314ffa9c61eb794b05dd188ac68684c0a0e00", None::<PaymentPreimage> },
+			{2,
+				"3045022100c2f636b397f0fd6731b04323a0743aee902f01ac2e8bdac72548ab5380fecd0f02206ee5c57fac4c5255018bc687ae46a97a9781b7d87722d3c73b8bc93d951f713f",
+				"304402203a6ed1dc27298cfb030a5ff0f237b5288e263bd3cfe13ced890f3559e7c25db10220713167cc374f850a2f414dd8988f87cbfe978ba56b8c5cf690aa3c2d357a174c",
+				"03000000000101d8211cfec4c28b189edcf7b12b739bfbc0f77e44cc6fab67e50fa23cc78481c5020000000000000000011027000000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a050047304402203a6ed1dc27298cfb030a5ff0f237b5288e263bd3cfe13ced890f3559e7c25db10220713167cc374f850a2f414dd8988f87cbfe978ba56b8c5cf690aa3c2d357a174c83483045022100c2f636b397f0fd6731b04323a0743aee902f01ac2e8bdac72548ab5380fecd0f02206ee5c57fac4c5255018bc687ae46a97a9781b7d87722d3c73b8bc93d951f713f01008576a914ef8968bbfe34ad740642784d7b1efaebfd5b23ec8763ac672103d8507a026fb30bcd48ee9c765c7346470d0d397661d43dd2eb601f661ab92a0b7c820120876475527c2103c26117339025855b87deda5e138d438b2098881a5e6f81f72a60310faef473c652ae67a91489baf9f76be304292b0314ffa9c61eb794b05dd188ac68684c0a0e00", None::<PaymentPreimage> }
+		});
 	}
 
 	#[test]

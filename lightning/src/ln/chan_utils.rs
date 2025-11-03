@@ -1884,6 +1884,7 @@ impl CommitmentTransaction {
 				let channel_value_satoshis = Amount::from_sat(channel_parameters.channel_value_satoshis());
 				// These subtractions panic on underflow, but this should never happen
 				let trimmed_sum_sat = channel_value_satoshis - nondust_htlcs_value_sum_sat - to_broadcaster_value_sat - to_countersignatory_value_sat;
+				println!("CKC creating zero fee anchor: {} (trimmed sum: {})", cmp::min(Amount::from_sat(P2A_MAX_VALUE), trimmed_sum_sat), trimmed_sum_sat);
 				insert_non_htlc_output(TxOut {
 					script_pubkey: shared_anchor_script_pubkey(),
 					value: cmp::min(Amount::from_sat(P2A_MAX_VALUE), trimmed_sum_sat),

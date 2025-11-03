@@ -17167,6 +17167,188 @@ mod tests {
 		} );
 	}
 
+	#[cfg(ldk_test_vectors)]
+	fn secret_from_hex(hex: &str) -> SecretKey {
+		SecretKey::from_slice(&<Vec<u8>>::from_hex(hex).unwrap()[..]).unwrap()
+	}
+
+	#[cfg(ldk_test_vectors)]
+	fn pubkey_from_hex(hex: &str) -> PublicKey {
+		PublicKey::from_slice(&<Vec<u8>>::from_hex(hex).unwrap()[..]).unwrap()
+	}
+
+	// Test vectors from bolt03/zero_fee_commitments.json
+	#[cfg(ldk_test_vectors)]
+	#[test]
+	fn zero_fee_commitment_test_vectors() {
+		use crate::chain::transaction::OutPoint;
+		use crate::ln::chan_utils::{
+			CounterpartyChannelTransactionParameters, HolderCommitmentTransaction,
+		};
+
+		use crate::ln::channel::HTLCOutputInCommitment;
+		use crate::sign::ecdsa::EcdsaChannelSigner;
+		use crate::sync::Arc;
+		use crate::types::features::ChannelTypeFeatures;
+		use crate::util::config::UserConfig;
+		use crate::util::logger::Logger;
+		use bitcoin::consensus::encode::serialize;
+		use bitcoin::hash_types::Txid;
+		use bitcoin::hex::{DisplayHex, FromHex};
+		use bitcoin::secp256k1::Secp256k1;
+		use core::str::FromStr;
+
+		let feeest = TestFeeEstimator::new(250); // Fee doesn't matter
+		let logger: Arc<dyn Logger> = Arc::new(TestLogger::new());
+		let secp_ctx = Secp256k1::new();
+
+		// local_funding_priv
+		let alice_funding_privkey =
+			secret_from_hex("8f567cb6382507019349a47623902aa65d7a142ac85462eeb63dc11799ac2bb9");
+		// local_payment_basepoint_secret
+		let alice_payment_basepoint_secret =
+			secret_from_hex("94f29d20a225ea2f7093331ba0f0f28a9382d8ed08e1fd121329925cd0c01b6d");
+		// local_delayed_payment_basepoint_secret
+		let alice_delayed_payment_basepoint_secret =
+			secret_from_hex("e9d4e1935bf16e948d76ad007baf0646df023af38f41bcf2c8799336949d291e");
+		// local_htlc_basepoint_secret
+		let alice_htlc_basepoint_secret =
+			secret_from_hex("f699038ef4f95b6b16b22a5c04fcb3c508d68d02cd2f86cf197e0fac451681b0");
+		// Not set in test vectors, not required because we're signing Alice's commitment.
+		let alice_revocation_base_secret =
+			secret_from_hex("1111111111111111111111111111111111111111111111111111111111111111");
+
+		let alice_signer = InMemorySigner::new(
+			alice_funding_privkey,
+			alice_revocation_base_secret,
+			alice_payment_basepoint_secret,
+			alice_payment_basepoint_secret,
+			true,
+			alice_delayed_payment_basepoint_secret,
+			alice_htlc_basepoint_secret,
+			// Not provided in test vectors.
+			[0xff; 32],
+			[0; 32],
+			[0; 32],
+		);
+		let alice_keys_provider = Keys { signer: alice_signer.clone() };
+		let alice_pubkeys = alice_signer.pubkeys(&secp_ctx);
+
+		// remote_funding_priv
+		let bob_funding_privkey =
+			secret_from_hex("4d22d96f0c0ccecffee4554d20ed43e51235917508ee292d281235bb7ebe0e3e");
+		// remote_payment_basepoint_secret
+		let bob_payment_basepoint_secret =
+			secret_from_hex("580bff39085f3a6ae8b1f32905e67366c522ea8f2418391145b2e98f1a7cb3f2");
+		// remote_htlc_basepoint_secret
+		let bob_htlc_basepoint_secret =
+			secret_from_hex("32df9c4dd46ab6210e74e81e15282106f8db883f45674eabb3324166c6513062");
+		// Not set in test vectors, overridden later.
+		let bob_revocation_base_secret =
+			secret_from_hex("2222222222222222222222222222222222222222222222222222222222222222");
+		let bob_delayed_payment_basepoint_secret =
+			secret_from_hex("2222222222222222222222222222222222222222222222222222222222222222");
+
+		let bob_signer = InMemorySigner::new(
+			bob_funding_privkey,
+			bob_revocation_base_secret,
+			bob_payment_basepoint_secret,
+			bob_payment_basepoint_secret,
+			true,
+			bob_delayed_payment_basepoint_secret,
+			bob_htlc_basepoint_secret,
+			// Not provided in test vectors.
+			[0xff; 32],
+			[0; 32],
+			[0; 32],
+		);
+
+		// Test vectors only provide revocation_basepoint for bob, override it here.
+		let mut bob_pubkeys = bob_signer.pubkeys(&secp_ctx);
+		bob_pubkeys.revocation_basepoint = RevocationBasepoint(pubkey_from_hex(
+			"026788d019ed90149cbc9aa5ff26dd7f1a6d3cd1bee8bf36cf7d8310fbd3606b14",
+		));
+
+		// Node id for alice and bob doesn't matter to our test vectors.
+		let bob_node_id = crate::util::test_utils::pubkey(2);
+		let mut config = UserConfig::default();
+		config.manually_accept_inbound_channels = true;
+		config.channel_handshake_config.negotiate_anchor_zero_fee_commitments = true;
+
+		let mut chan = OutboundV1Channel::<&Keys>::new(
+			&LowerBoundedFeeEstimator::new(&feeest),
+			&&alice_keys_provider,
+			&&alice_keys_provider,
+			bob_node_id,
+			&crate::ln::channelmanager::provided_init_features(&config),
+			// funding_amount_satoshis
+			10_000_000,
+			0,
+			0,
+			&config,
+			0,
+			0,
+			None,
+			&*logger,
+		)
+		.unwrap();
+
+		// Zero value reserve makes balances easier to reason about.
+		chan.funding.counterparty_selected_channel_reserve_satoshis = Some(0);
+		chan.funding.holder_selected_channel_reserve_satoshis = 0;
+
+		// funding_txid, funding_index
+		let funding_txid_str = "4b70a2ee47b3005a6316ff87055e94c6b3d433d0fd3b384c9ecf7813843c1eae";
+		let funding_info = OutPoint { txid: Txid::from_str(funding_txid_str).unwrap(), index: 1 };
+
+		// Must override alice's keys because we use a fixed revocation_basepoint.
+		chan.funding.channel_transaction_parameters.holder_pubkeys = alice_pubkeys.clone();
+		chan.funding.channel_transaction_parameters.counterparty_parameters =
+			Some(CounterpartyChannelTransactionParameters {
+				pubkeys: bob_pubkeys.clone(),
+				// to_self_delay
+				selected_contest_delay: 720,
+			});
+		chan.funding.channel_transaction_parameters.funding_outpoint = Some(funding_info);
+		chan.funding.channel_transaction_parameters.channel_type_features =
+			ChannelTypeFeatures::anchors_zero_fee_commitments();
+
+		// per_commitment_point
+		let per_commitment_point =
+			pubkey_from_hex("0275d12130c276b4274358a328901f8fc47e6c72629102e4b46c9f27dd2c1dda98");
+
+		macro_rules! test_commitment_with_zero_fee {
+			( $counterparty_sig_hex: expr, $sig_hex: expr, $tx_hex: expr, $($remain:tt)* ) => {
+				chan.funding.channel_transaction_parameters.channel_type_features = ChannelTypeFeatures::anchors_zero_fee_commitments();
+				test_commitment_common!(chan, logger, secp_ctx, alice_signer, alice_pubkeys, per_commitment_point,
+				$counterparty_sig_hex, $sig_hex, $tx_hex, &ChannelTypeFeatures::anchors_zero_fee_commitments(), $($remain)*);
+			};
+		}
+
+		// Commitment transaction without HTLCs, both outputs untrimmed
+		chan.funding.value_to_self_msat = 8000000000;
+		test_commitment_with_zero_fee!(
+			"3045022100a05afcdfaf045a0a7b6adb194dcda430bb8e47db8c6d1536b2a94bd98fed77ed02206d580dcd5cba42aebed39515fbd00fdd90480825ae23cce87eef1f1711e2125e",
+			"304502210094afa18972599f7a78b06467bd11d742875baf74aa9e516a775720564671fd8e02206b9ed5f48fb92a1c19543d67f29ee3bd43afee1ec1af6f7f9b4e3371beb82162",
+			"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef800300000000000000000451024e7380841e0000000000160014f2123f1a4b67887f2e5f02eda73e6327010152ea00127a0000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a0400483045022100a05afcdfaf045a0a7b6adb194dcda430bb8e47db8c6d1536b2a94bd98fed77ed02206d580dcd5cba42aebed39515fbd00fdd90480825ae23cce87eef1f1711e2125e0148304502210094afa18972599f7a78b06467bd11d742875baf74aa9e516a775720564671fd8e02206b9ed5f48fb92a1c19543d67f29ee3bd43afee1ec1af6f7f9b4e3371beb8216201475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {});
+
+		// Commitment transaction without HTLCs, one output trimmed below maximum anchor amount
+		chan.context.holder_dust_limit_satoshis = 330;
+		chan.funding.value_to_self_msat = 9999800000;
+		test_commitment_with_zero_fee!(
+			"3045022100a13c79500a9b30eba7af13418816b54aea1da0bdf41c0aa10f53a29017080d5602201a11bcc10f99c4334f778ea94e83db63d2409ff10e9e95b4260ac0dba27a490f",
+			"30440220706abbc90e9ab70a7e1f0f28b24baf2f105e49b7a41bf3b5e694f060806fc54402206020a5e51e437c027610a59f0252ac075dfb2b8e5b45f49149e9532935ba5e7a",
+			"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef8002c8000000000000000451024e73b895980000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a0400483045022100a13c79500a9b30eba7af13418816b54aea1da0bdf41c0aa10f53a29017080d5602201a11bcc10f99c4334f778ea94e83db63d2409ff10e9e95b4260ac0dba27a490f014730440220706abbc90e9ab70a7e1f0f28b24baf2f105e49b7a41bf3b5e694f060806fc54402206020a5e51e437c027610a59f0252ac075dfb2b8e5b45f49149e9532935ba5e7a01475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {});
+
+		// Commitment transaction without HTLCs, one output trimmed above maximum anchor amount
+		chan.context.holder_dust_limit_satoshis = 15000;
+		chan.funding.value_to_self_msat = 9990000000;
+		test_commitment_with_zero_fee!(
+        "304402204042ce57689bb7e52af7fb9ec28d6610674ce00e5e438bb1119acfb91aad6386022065de45c4fe52d86249d80397f2c85e143550cb14b3de0cd1e6a54d0622a2bbd4",
+        "30450221009fb4e444e9fe2d7db0f867704745c8ea2e4e1018b5986fd8cb9d9facdc1bb1be02202d6589a20ea8a8e3594eac3c99bad523139a36e313a66c6302e619786cb42396",
+		"03000000000101ae1e3c841378cf9e4c383bfdd033d4b3c6945e0587ff16635a00b347eea2704b0100000000340fef8002f0000000000000000451024e73706f980000000000220020f2d298ffcfd6d899a3abada37bfc6f42ce0b7b66f3e39e903e8419ac97dca75a040047304402204042ce57689bb7e52af7fb9ec28d6610674ce00e5e438bb1119acfb91aad6386022065de45c4fe52d86249d80397f2c85e143550cb14b3de0cd1e6a54d0622a2bbd4014830450221009fb4e444e9fe2d7db0f867704745c8ea2e4e1018b5986fd8cb9d9facdc1bb1be02202d6589a20ea8a8e3594eac3c99bad523139a36e313a66c6302e619786cb4239601475221027eb9596a68740445fb151ff37d5422e7f65f2c497c90fda63e738eb606c15bd62103bbc16dc8851bece603322f06b3c8da329401b7be7e9fdd3f3090ad19aed0807052aec50fbb20", {});
+	}
+
 	#[test]
 	#[rustfmt::skip]
 	fn test_per_commitment_secret_gen() {

@@ -404,7 +404,6 @@ impl TxBuilder for SpecTxBuilder {
 		// This is because when the remote party sends an `update_fee` message, we build the new
 		// commitment transaction *before* checking whether the remote party's balance is enough to
 		// cover the total fee.
-
 		let (value_to_self, value_to_remote) = if channel_parameters.is_outbound_from_holder {
 			(
 				(local_balance_before_fee_msat / 1000).saturating_sub(commit_tx_fee_sat),

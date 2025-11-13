@@ -1,10 +1,10 @@
 use crate::ln::channelmanager::{PaymentId, RecipientOnionFields, Retry};
 use crate::ln::functional_test_utils::*;
-use crate::ln::msgs::ChannelMessageHandler;
+use crate::ln::msgs::{accountable_from_bool, ChannelMessageHandler, ExperimentalAccountable};
 use crate::routing::router::{PaymentParameters, RouteParameters};
 
 fn test_accountable_forwarding_with_override(
-	override_accountable: Option<u8>, expected_forwarded: u8,
+	override_accountable: ExperimentalAccountable, expected_forwarded: ExperimentalAccountable,
 ) {
 	let chanmon_cfgs = create_chanmon_cfgs(3);
 	let node_cfgs = create_node_cfgs(3, &chanmon_cfgs);
@@ -49,9 +49,8 @@ fn test_accountable_forwarding_with_override(
 	assert_eq!(updates_bc.update_add_htlcs.len(), 1);
 	let htlc_bc = &updates_bc.update_add_htlcs[0];
 	assert_eq!(
-		htlc_bc.accountable,
-		Some(expected_forwarded),
-		"B -> C should have accountable = Some({})",
+		htlc_bc.accountable, expected_forwarded,
+		"B -> C should have accountable = {:?}",
 		expected_forwarded
 	);
 
@@ -66,7 +65,7 @@ fn test_accountable_forwarding_with_override(
 #[test]
 fn test_accountable_signal() {
 	// Tests forwarding of accountable signal for various incoming signal values.
-	test_accountable_forwarding_with_override(None, 0);
-	test_accountable_forwarding_with_override(Some(7), 7);
-	test_accountable_forwarding_with_override(Some(3), 0);
+	test_accountable_forwarding_with_override(None, accountable_from_bool(false));
+	test_accountable_forwarding_with_override(Some(7), accountable_from_bool(true));
+	test_accountable_forwarding_with_override(Some(3), accountable_from_bool(false));
 }

@@ -62,7 +62,7 @@ use crate::ln::interactivetxs::{
 	InteractiveTxSigningSession, NegotiationError, SharedOwnedInput, SharedOwnedOutput,
 	TX_COMMON_FIELDS_WEIGHT,
 };
-use crate::ln::msgs;
+use crate::ln::msgs::{self, accountable_from_bool};
 use crate::ln::msgs::{ClosingSigned, ClosingSignedFeeRange, DecodeError, OnionErrorPacket};
 use crate::ln::onion_utils::{
 	AttributionData, HTLCFailReason, LocalHTLCFailureReason, HOLD_TIME_UNIT_MILLIS,
@@ -12611,10 +12611,6 @@ where
 			force_holding_cell = true;
 		}
 
-		// For historical reasons, the experimental signal uses the full range of bits to express
-		// a binary signal. We set a zero value so that it is distinguishable from null.
-		let accountable = Some(if accountable { 7 } else { 0 });
-
 		// Now update local state:
 		if force_holding_cell {
 			self.context.holding_cell_htlc_updates.push(HTLCUpdateAwaitingACK::AddHTLC {
@@ -12626,7 +12622,7 @@ where
 				skimmed_fee_msat,
 				blinding_point,
 				hold_htlc: hold_htlc.then(|| ()),
-				accountable,
+				accountable: accountable_from_bool(accountable),
 			});
 			return Ok(false);
 		}

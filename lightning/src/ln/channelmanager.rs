@@ -7525,9 +7525,7 @@ where
 						onion_packet.clone(),
 						*skimmed_fee_msat,
 						next_blinding_point,
-						// For historical reasons, we use the full range of bits to represent our
-						// binary accountable signal.
-						*incoming_accountable == Some(7),
+						incoming_accountable.unwrap_or(false),
 						&self.fee_estimator,
 						&&logger,
 					) {

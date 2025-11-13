@@ -12646,7 +12646,7 @@ where
 			skimmed_fee_msat,
 			send_timestamp,
 			hold_htlc: hold_htlc.then(|| ()),
-			accountable,
+			accountable: accountable_from_bool(accountable),
 		});
 		self.context.next_holder_htlc_id += 1;
 

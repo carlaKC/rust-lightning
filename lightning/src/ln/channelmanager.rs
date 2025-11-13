@@ -70,8 +70,8 @@ use crate::ln::inbound_payment;
 use crate::ln::interactivetxs::InteractiveTxMessageSend;
 use crate::ln::msgs;
 use crate::ln::msgs::{
-	BaseMessageHandler, ChannelMessageHandler, CommitmentUpdate, DecodeError, LightningError,
-	MessageSendEvent,
+	accountable_into_bool, BaseMessageHandler, ChannelMessageHandler, CommitmentUpdate,
+	DecodeError, LightningError, MessageSendEvent,
 };
 use crate::ln::onion_payment::{
 	check_incoming_htlc_cltv, create_fwd_pending_htlc_info, create_recv_pending_htlc_info,
@@ -431,7 +431,7 @@ pub struct PendingHTLCInfo {
 	pub skimmed_fee_msat: Option<u64>,
 	/// An experimental field indicating whether our node's reputation would be held accountable
 	/// for the timely resolution of the received HTLC.
-	pub incoming_accountable: Option<u8>,
+	pub incoming_accountable: Option<bool>,
 }
 
 #[derive(Clone, Debug)] // See FundedChannel::revoke_and_ack for why, tl;dr: Rust bug
@@ -5117,7 +5117,7 @@ where
 				let current_height: u32 = self.best_block.read().unwrap().height;
 				create_recv_pending_htlc_info(decoded_hop, shared_secret, msg.payment_hash,
 					msg.amount_msat, msg.cltv_expiry, None, allow_underpay, msg.skimmed_fee_msat,
-					msg.accountable, current_height)
+					accountable_into_bool(msg.accountable), current_height)
 			},
 			onion_utils::Hop::Forward { .. } | onion_utils::Hop::BlindedForward { .. } => {
 				create_fwd_pending_htlc_info(msg, decoded_hop, shared_secret, next_packet_pubkey_opt)

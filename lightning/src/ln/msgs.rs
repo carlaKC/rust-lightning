@@ -777,7 +777,22 @@ pub struct UpdateAddHTLC {
 	/// Note that this field is [`experimental`] so should not be used for forwarding decisions.
 	///
 	/// [`experimental`]: https://github.com/lightning/blips/blob/master/blip-0004.md
-	pub accountable: Option<u8>,
+	pub accountable: ExperimentalAccountable,
+}
+
+/// Represents the value sent on the wire to signal experimental accountability. For historical
+/// reasons the least significant three bits are used to represent the accountable signal's value,
+/// though it is now only interpreted as a binary value.
+pub type ExperimentalAccountable = Option<u8>;
+
+/// Converts a boolean accountable signal to its wire representation.
+pub fn accountable_from_bool(value: bool) -> ExperimentalAccountable {
+	Some(if value { 7 } else { 0 })
+}
+
+/// Converts the accountable signal on the wire to a boolean signal.
+pub fn accountable_into_bool(accountable: ExperimentalAccountable) -> Option<bool> {
+	accountable.map(|v| v == 7)
 }
 
 /// An [`onion message`] to be sent to or received from a peer.

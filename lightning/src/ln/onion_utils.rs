@@ -475,6 +475,10 @@ pub(super) fn build_onion_payloads<'a>(
 			PayloadCallbackAction::PushFront => res.insert(0, payload),
 		},
 	)?;
+
+	for r in res.iter() {
+		println!("CKC: {:?}", r);
+	}
 	Ok((res, value_msat, cltv))
 }
 

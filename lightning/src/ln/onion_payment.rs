@@ -74,6 +74,32 @@ fn check_blinded_forward(
 	Ok((amt_to_forward, outgoing_cltv_value))
 }
 
+fn check_trampoline_onion_constraints(
+	outer_hop_data: &msgs::InboundTrampolineEntrypointPayload, trampoline_cltv_value: u32,
+	trampoline_amount: u64,
+) -> Result<(), InboundHTLCErr> {
+	if outer_hop_data.outgoing_cltv_value < trampoline_cltv_value {
+		return Err(InboundHTLCErr {
+			reason: LocalHTLCFailureReason::FinalIncorrectCLTVExpiry,
+			err_data: outer_hop_data.outgoing_cltv_value.to_be_bytes().to_vec(),
+			msg: "Trampoline onion's CLTV value exceeded the outer onion's",
+		});
+	}
+	let outgoing_amount = outer_hop_data
+		.multipath_trampoline_data
+		.as_ref()
+		.map_or(outer_hop_data.amt_to_forward, |mtd| mtd.total_msat);
+	if outgoing_amount < trampoline_amount {
+		return Err(InboundHTLCErr {
+			reason: LocalHTLCFailureReason::FinalIncorrectHTLCAmount,
+			err_data: outgoing_amount.to_be_bytes().to_vec(),
+			msg: "Trampoline onion's amt value exceeded the outer onion's",
+		});
+	}
+
+	Ok(())
+}
+
 enum RoutingInfo {
 	Direct {
 		short_channel_id: u64,
@@ -135,7 +161,9 @@ pub(super) fn create_fwd_pending_htlc_info(
 				reason: LocalHTLCFailureReason::InvalidOnionPayload,
 				err_data: Vec::new(),
 			}),
-		onion_utils::Hop::TrampolineForward { next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
+		onion_utils::Hop::TrampolineForward { ref outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
+			// TODO: return reason as forward issue, not as receiving issue when forwarding is ready.
+			check_trampoline_onion_constraints(outer_hop_data, next_trampoline_hop_data.outgoing_cltv_value, next_trampoline_hop_data.amt_to_forward)?;
 			(
 				RoutingInfo::Trampoline {
 					next_trampoline: next_trampoline_hop_data.next_trampoline,
@@ -150,7 +178,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 				None
 			)
 		},
-		onion_utils::Hop::TrampolineBlindedForward { outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
+		onion_utils::Hop::TrampolineBlindedForward { ref outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
 			let (amt_to_forward, outgoing_cltv_value) = check_blinded_forward(
 				msg.amount_msat, msg.cltv_expiry, &next_trampoline_hop_data.payment_relay, &next_trampoline_hop_data.payment_constraints, &next_trampoline_hop_data.features
 			).map_err(|()| {
@@ -160,6 +188,13 @@ pub(super) fn create_fwd_pending_htlc_info(
 					msg: "Underflow calculating outbound amount or cltv value for blinded forward",
 					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
 					err_data: vec![0; 32],
+				}
+			})?;
+			check_trampoline_onion_constraints(outer_hop_data, outgoing_cltv_value, amt_to_forward).map_err(|e| {
+				InboundHTLCErr {
+					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
+					err_data: vec![0; 32],
+					msg: e.msg,
 				}
 			})?;
 			(
@@ -282,16 +317,20 @@ pub(super) fn create_recv_pending_htlc_info(
 			 intro_node_blinding_point.is_none(), true, invoice_request, None)
 		}
 		onion_utils::Hop::TrampolineReceive {
+			ref outer_hop_data,
 			trampoline_shared_secret,
 			trampoline_hop_data: msgs::InboundOnionReceivePayload {
 				payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
 				cltv_expiry_height, payment_metadata, ..
 			}, ..
-		} =>
+		} => {
+			check_trampoline_onion_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat)?;
 			(payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
-				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes())),
+				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes()))
+		},
 		onion_utils::Hop::TrampolineBlindedReceive {
 			trampoline_shared_secret,
+			ref outer_hop_data,
 			trampoline_hop_data: msgs::InboundOnionBlindedReceivePayload {
 				sender_intended_htlc_amt_msat, total_msat, cltv_expiry_height, payment_secret,
 				intro_node_blinding_point, payment_constraints, payment_context, keysend_preimage,
@@ -309,6 +348,13 @@ pub(super) fn create_recv_pending_htlc_info(
 					}
 				})?;
 			let payment_data = msgs::FinalOnionHopData { payment_secret, total_msat };
+			check_trampoline_onion_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat).map_err(|e| {
+				InboundHTLCErr {
+					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
+					err_data: vec![0; 32],
+					msg: e.msg,
+				}
+			})?;
 			(Some(payment_data), keysend_preimage, custom_tlvs,
 				sender_intended_htlc_amt_msat, cltv_expiry_height, None, Some(payment_context),
 				intro_node_blinding_point.is_none(), true, invoice_request, Some(trampoline_shared_secret.secret_bytes()))
@@ -597,6 +643,25 @@ where
 			})
 		}
 		onion_utils::Hop::TrampolineForward { next_trampoline_hop_data: msgs::InboundTrampolineForwardPayload { amt_to_forward, outgoing_cltv_value, next_trampoline }, trampoline_shared_secret, incoming_trampoline_public_key, .. } => {
+			let next_trampoline_packet_pubkey = onion_utils::next_hop_pubkey(secp_ctx,
+				incoming_trampoline_public_key, &trampoline_shared_secret.secret_bytes());
+			Some(NextPacketDetails {
+				next_packet_pubkey: next_trampoline_packet_pubkey,
+				outgoing_connector: HopConnector::Trampoline(next_trampoline),
+				outgoing_amt_msat: amt_to_forward,
+				outgoing_cltv_value,
+			})
+		}
+		onion_utils::Hop::TrampolineBlindedForward { next_trampoline_hop_data: msgs::InboundTrampolineBlindedForwardPayload { next_trampoline, ref payment_relay, ref payment_constraints, ref features, .. }, outer_shared_secret, trampoline_shared_secret, incoming_trampoline_public_key, .. } => {
+			let (amt_to_forward, outgoing_cltv_value) = match check_blinded_forward(
+				msg.amount_msat, msg.cltv_expiry, &payment_relay, &payment_constraints, &features
+			) {
+				Ok((amt, cltv)) => (amt, cltv),
+				Err(()) => {
+					return encode_relay_error("Trampoline blinded forward amt or CLTV values exceeded the outer onion's",
+						LocalHTLCFailureReason::InvalidOnionBlinding, outer_shared_secret.secret_bytes(), Some(trampoline_shared_secret.secret_bytes()), &[0; 32]);
+				}
+			};
 			let next_trampoline_packet_pubkey = onion_utils::next_hop_pubkey(secp_ctx,
 				incoming_trampoline_public_key, &trampoline_shared_secret.secret_bytes());
 			Some(NextPacketDetails {

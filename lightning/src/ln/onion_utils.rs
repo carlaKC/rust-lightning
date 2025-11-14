@@ -475,6 +475,7 @@ pub(super) fn build_onion_payloads<'a>(
 			PayloadCallbackAction::PushFront => res.insert(0, payload),
 		},
 	)?;
+
 	Ok((res, value_msat, cltv))
 }
 

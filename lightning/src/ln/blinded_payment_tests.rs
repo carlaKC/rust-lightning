@@ -2400,7 +2400,7 @@ fn create_blinded_tail(
 }
 
 // Creates a replacement onion that is used to produce scenarios that we don't support, specifically
-// unblinded receives and invalid payloads.
+// payloads that send to unblinded receives and invalid payloads.
 fn replacement_onion(
 	test_case: TrampolineTestCase, secp_ctx: &Secp256k1<All>, override_random_bytes: [u8; 32],
 	route: Route, original_amt_msat: u64, starting_htlc_offset: u32, original_trampoline_cltv: u32,
@@ -2566,7 +2566,8 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 				},
 			],
 			// Create a blinded tail where Carol is receiving. In our unblinded test cases, we'll
-			// override this anyway (with an unblinded receive, which LDK doesn't allow).
+			// override this anyway (with a tail sending to an unblinded receive, which LDK doesn't
+			// allow).
 			blinded_tail: Some(create_blinded_tail(
 				&secp_ctx,
 				override_random_bytes,
@@ -2604,7 +2605,7 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 	};
 
 	// Replace the onion to test different scenarios:
-	// - If !blinded: Creates unblinded receive in trampoline onion
+	// - If !blinded: Creates a payload sending to an unblinded trampoline
 	// - If blinded: Modifies outer onion to create outer/inner mismatches if testing failures
 	update_message.map(|msg| {
 		msg.onion_routing_packet = replacement_onion(

@@ -30,6 +30,7 @@ fn test_accountable_forwarding_with_override(
 	let updates_ab = get_htlc_update_msgs(&nodes[0], &nodes[1].node.get_our_node_id());
 	assert_eq!(updates_ab.update_add_htlcs.len(), 1);
 	let mut htlc_ab = updates_ab.update_add_htlcs[0].clone();
+	assert_eq!(htlc_ab.accountable, accountable_from_bool(false));
 
 	// Override accountable value if requested
 	if let Some(override_value) = override_accountable {

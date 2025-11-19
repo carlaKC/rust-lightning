@@ -161,9 +161,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 				reason: LocalHTLCFailureReason::InvalidOnionPayload,
 				err_data: Vec::new(),
 			}),
-		onion_utils::Hop::TrampolineForward { ref outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
-			// TODO: return reason as forward issue, not as receiving issue when forwarding is ready.
-			check_trampoline_onion_constraints(outer_hop_data, next_trampoline_hop_data.outgoing_cltv_value, next_trampoline_hop_data.amt_to_forward)?;
+		onion_utils::Hop::TrampolineForward { next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
 			(
 				RoutingInfo::Trampoline {
 					next_trampoline: next_trampoline_hop_data.next_trampoline,
@@ -178,7 +176,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 				None
 			)
 		},
-		onion_utils::Hop::TrampolineBlindedForward { ref outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
+		onion_utils::Hop::TrampolineBlindedForward { outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
 			let (amt_to_forward, outgoing_cltv_value) = check_blinded_forward(
 				msg.amount_msat, msg.cltv_expiry, &next_trampoline_hop_data.payment_relay, &next_trampoline_hop_data.payment_constraints, &next_trampoline_hop_data.features
 			).map_err(|()| {
@@ -188,13 +186,6 @@ pub(super) fn create_fwd_pending_htlc_info(
 					msg: "Underflow calculating outbound amount or cltv value for blinded forward",
 					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
 					err_data: vec![0; 32],
-				}
-			})?;
-			check_trampoline_onion_constraints(outer_hop_data, outgoing_cltv_value, amt_to_forward).map_err(|e| {
-				InboundHTLCErr {
-					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
-					err_data: vec![0; 32],
-					msg: e.msg,
 				}
 			})?;
 			(

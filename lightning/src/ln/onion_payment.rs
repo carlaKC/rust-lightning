@@ -74,7 +74,7 @@ fn check_blinded_forward(
 	Ok((amt_to_forward, outgoing_cltv_value))
 }
 
-fn check_trampoline_onion_constraints(
+fn check_trampoline_payment_constraints(
 	outer_hop_data: &msgs::InboundTrampolineEntrypointPayload, trampoline_cltv_value: u32,
 	trampoline_amount: u64,
 ) -> Result<(), InboundHTLCErr> {
@@ -315,7 +315,7 @@ pub(super) fn create_recv_pending_htlc_info(
 				cltv_expiry_height, payment_metadata, ..
 			}, ..
 		} => {
-			check_trampoline_onion_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat)?;
+			check_trampoline_payment_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat)?;
 			(payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
 				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes()))
 		},
@@ -339,7 +339,7 @@ pub(super) fn create_recv_pending_htlc_info(
 					}
 				})?;
 			let payment_data = msgs::FinalOnionHopData { payment_secret, total_msat };
-			check_trampoline_onion_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat).map_err(|e| {
+			check_trampoline_payment_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat).map_err(|e| {
 				InboundHTLCErr {
 					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
 					err_data: vec![0; 32],

@@ -8601,27 +8601,42 @@ where
 					*htlc_id,
 				);
 
-				let mut forward_htlcs = self.forward_htlcs.lock().unwrap();
-				match forward_htlcs.entry(*prev_outbound_scid_alias) {
-					hash_map::Entry::Occupied(mut entry) => {
-						entry.get_mut().push(failure);
-					},
-					hash_map::Entry::Vacant(entry) => {
-						entry.insert(vec![failure]);
-					},
-				}
-				mem::drop(forward_htlcs);
-				let mut pending_events = self.pending_events.lock().unwrap();
-				pending_events.push_back((
-					events::Event::HTLCHandlingFailed {
-						prev_channel_id: *channel_id,
-						failure_type,
-						failure_reason: Some(onion_error.into()),
-					},
-					None,
-				));
+				self.fail_htlc_backwards_from_forward(
+					onion_error,
+					failure_type,
+					prev_outbound_scid_alias,
+					channel_id,
+					failure,
+				);
 			},
 		}
+	}
+
+	/// Fails a forwarded HTLC backwards to the previous hop, queuing the failure for processing
+	/// and emits an [`Event::HTLCHandlingFailed`] event.
+	fn fail_htlc_backwards_from_forward(
+		&self, onion_error: &HTLCFailReason, failure_type: HTLCHandlingFailureType,
+		short_channel_id: &u64, channel_id: &ChannelId, failure: HTLCForwardInfo,
+	) {
+		let mut forward_htlcs = self.forward_htlcs.lock().unwrap();
+		match forward_htlcs.entry(*short_channel_id) {
+			hash_map::Entry::Occupied(mut entry) => {
+				entry.get_mut().push(failure);
+			},
+			hash_map::Entry::Vacant(entry) => {
+				entry.insert(vec![failure]);
+			},
+		}
+		mem::drop(forward_htlcs);
+		let mut pending_events = self.pending_events.lock().unwrap();
+		pending_events.push_back((
+			events::Event::HTLCHandlingFailed {
+				prev_channel_id: *channel_id,
+				failure_type,
+				failure_reason: Some(onion_error.into()),
+			},
+			None,
+		));
 	}
 
 	/// Provides a payment preimage in response to [`Event::PaymentClaimable`], generating any

@@ -728,6 +728,71 @@ pub enum InboundChannelFunds {
 	DualFunded,
 }
 
+/// Describes how an HTLC was forwarded through our node.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PaymentForwardedType {
+	/// The source of the payment selected its route and provided an outgoing channel for us to
+	/// forward out on.
+	SourceRouted {
+		/// The incoming HTLC forwarded to our node that was claimed.
+		incoming_claimed: HTLCLocator,
+		/// The outgoing HTLC forwarded out by our node that was fulfilled by our counterparty.
+		outgoing_fulfilled: HTLCLocator,
+	},
+	/// The source of the payment offloaded routing to our node, which was responsible for choosing
+	/// the outgoing path(s) for the payment.
+	TrampolineRouted {
+		/// The set of incoming HTLCs forwarded to our node.
+		prev_htlcs: Vec<HTLCLocator>,
+		/// The set of outgoing HTLCs forwarded out by our node.
+		next_htlcs: Vec<HTLCLocator>,
+		/// The incoming HTLC that was claimed. For trampoline payments with multiple [`prev_htlcs`]
+		/// we will claim each incoming HTLC one at a time, omitting a single event for each claim.
+		///
+		/// [`prev_htlcs`]: Self::Trampoline::prev_htlcs
+		incoming_claimed: HTLCLocator,
+		/// The outgoing HTLC that was fulfilled, that allowed us to claim back our incoming HTLCs.
+		/// Even if we have multiple outgoing HTLCs associated with a single trampoline forward, we
+		/// only need a single outgoing HTLC to be fulfilled to claim all incoming HTLCs because the
+		/// preimage is the same for all of them.
+		outgoing_fulfilled: HTLCLocator,
+	},
+}
+
+// TODO(CKC): figure out how to make something _upgradable for use in events (they need to be
+// Readable, and the _upgradable macro only gives us MaybeReadable).
+impl_writeable_tlv_based_enum!(PaymentForwardedType,
+	  (1, SourceRouted) => {
+		  (1, prev_htlc, required),
+		  (3, next_htlc, required),
+	  },
+	  (3, TrampolineRouted) => {
+		  (1, prev_htlcs, required_vec),
+		  (3, next_htlcs, required_vec),
+		  (5, incoming_claimed, required),
+	  },
+);
+
+/// Identifies the channel and peer committed to a HTLC, used for both incoming and outgoing HTLCs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HTLCLocator {
+	/// The channel that the HTLC was sent or received on.
+	pub channel_id: ChannelId,
+
+	/// The `user_channel_id` for `channel_id`.
+	pub user_channel_id: Option<u128>,
+
+	/// The public key identify of the node that the HTLC was sent to or received from.
+	pub node_id: Option<PublicKey>,
+}
+
+// TODO(CKC): confirm that we do want odd values here?
+impl_writeable_tlv_based!(HTLCLocator, {
+	(1, channel_id, required),
+	(3, user_channel_id, option),
+	(5, node_id, required),
+});
+
 /// An Event which you should probably take some action in response to.
 ///
 /// Note that while Writeable and Readable are implemented for Event, you probably shouldn't use
@@ -1315,34 +1380,8 @@ pub enum Event {
 	/// This event will eventually be replayed after failures-to-handle (i.e., the event handler
 	/// returning `Err(ReplayEvent ())`) and will be persisted across restarts.
 	PaymentForwarded {
-		/// The channel id of the incoming channel between the previous node and us.
-		///
-		/// This is only `None` for events generated or serialized by versions prior to 0.0.107.
-		prev_channel_id: Option<ChannelId>,
-		/// The channel id of the outgoing channel between the next node and us.
-		///
-		/// This is only `None` for events generated or serialized by versions prior to 0.0.107.
-		next_channel_id: Option<ChannelId>,
-		/// The `user_channel_id` of the incoming channel between the previous node and us.
-		///
-		/// This is only `None` for events generated or serialized by versions prior to 0.0.122.
-		prev_user_channel_id: Option<u128>,
-		/// The `user_channel_id` of the outgoing channel between the next node and us.
-		///
-		/// This will be `None` if the payment was settled via an on-chain transaction. See the
-		/// caveat described for the `total_fee_earned_msat` field. Moreover it will be `None` for
-		/// events generated or serialized by versions prior to 0.0.122.
-		next_user_channel_id: Option<u128>,
-		/// The node id of the previous node.
-		///
-		/// This is only `None` for HTLCs received prior to 0.1 or for events serialized by
-		/// versions prior to 0.1
-		prev_node_id: Option<PublicKey>,
-		/// The node id of the next node.
-		///
-		/// This is only `None` for HTLCs received prior to 0.1 or for events serialized by
-		/// versions prior to 0.1
-		next_node_id: Option<PublicKey>,
+		/// Describe the type of forward associated with this event.
+		forward: PaymentForwardedType,
 		/// The total fee, in milli-satoshis, which was earned as a result of the payment.
 		///
 		/// Note that if we force-closed the channel over which we forwarded an HTLC while the HTLC
@@ -2026,12 +2065,7 @@ impl Writeable for Event {
 				});
 			},
 			&Event::PaymentForwarded {
-				prev_channel_id,
-				next_channel_id,
-				prev_user_channel_id,
-				next_user_channel_id,
-				prev_node_id,
-				next_node_id,
+				ref forward,
 				total_fee_earned_msat,
 				skimmed_fee_msat,
 				claim_from_onchain_tx,
@@ -2040,15 +2074,16 @@ impl Writeable for Event {
 				7u8.write(writer)?;
 				write_tlv_fields!(writer, {
 					(0, total_fee_earned_msat, option),
-					(1, prev_channel_id, option),
+					// Type 1 was prev_node_id in 0.2 and earlier.
 					(2, claim_from_onchain_tx, required),
-					(3, next_channel_id, option),
+					// Type 3 was next_channel_id in 0.2 and earlier.
 					(5, outbound_amount_forwarded_msat, option),
 					(7, skimmed_fee_msat, option),
-					(9, prev_user_channel_id, option),
-					(11, next_user_channel_id, option),
-					(13, prev_node_id, option),
-					(15, next_node_id, option),
+					// Type 9 was prev_user_channel_id in 0.2 and earlier.
+					// Type 11 was next_user_channel_id in 0.2 and earlier.
+					// Type 13 was prev_node_id in 0.2 and earlier.
+					// Type 15 was next_node_id in 0.2 and earlier.
+					(17, Some(forward.clone()), option),
 				});
 			},
 			&Event::ChannelClosed {
@@ -2543,35 +2578,66 @@ impl MaybeReadable for Event {
 			},
 			7u8 => {
 				let mut f = || {
-					let mut prev_channel_id = None;
-					let mut next_channel_id = None;
-					let mut prev_user_channel_id = None;
-					let mut next_user_channel_id = None;
-					let mut prev_node_id = None;
-					let mut next_node_id = None;
+					// Legacy values that have been replaced by prev_hlcs and next_htlcs, read
+					// so that we can migrate old events.
+					let mut prev_channel_id_legacy = None;
+					let mut next_channel_id_legacy = None;
+					let mut prev_user_channel_id_legacy = None;
+					let mut next_user_channel_id_legacy = None;
+					let mut prev_node_id_legacy = None;
+					let mut next_node_id_legacy = None;
+
 					let mut total_fee_earned_msat = None;
 					let mut skimmed_fee_msat = None;
 					let mut claim_from_onchain_tx = false;
 					let mut outbound_amount_forwarded_msat = None;
+					let mut forward_opt: Option<PaymentForwardedType> = None;
 					read_tlv_fields!(reader, {
 						(0, total_fee_earned_msat, option),
-						(1, prev_channel_id, option),
+						(1, prev_channel_id_legacy, option),
 						(2, claim_from_onchain_tx, required),
-						(3, next_channel_id, option),
+						(3, next_channel_id_legacy, option),
 						(5, outbound_amount_forwarded_msat, option),
 						(7, skimmed_fee_msat, option),
-						(9, prev_user_channel_id, option),
-						(11, next_user_channel_id, option),
-						(13, prev_node_id, option),
-						(15, next_node_id, option),
+						(9, prev_user_channel_id_legacy, option),
+						(11, next_user_channel_id_legacy, option),
+						(13, prev_node_id_legacy, option),
+						(15, next_node_id_legacy, option),
+						(17, forward_opt, option),
 					});
+
+					let has_legacy_field = prev_channel_id_legacy.is_some()
+						|| next_channel_id_legacy.is_some()
+						|| prev_user_channel_id_legacy.is_some()
+						|| next_user_channel_id_legacy.is_some()
+						|| prev_node_id_legacy.is_some()
+						|| next_node_id_legacy.is_some();
+
+					if has_legacy_field == forward_opt.is_some() {
+						return Err(msgs::DecodeError::InvalidValue);
+					}
+
 					Ok(Some(Event::PaymentForwarded {
-						prev_channel_id,
-						next_channel_id,
-						prev_user_channel_id,
-						next_user_channel_id,
-						prev_node_id,
-						next_node_id,
+						// Versions that did not write forward_opt only supported source routed
+						// payments. We unwrap channel_id because this field is only none for
+						// events serialized before 0.0.107. Nodes with pending forwards can't
+						// be upgraded directly to 0.1 from versions 0.0.123 or earlier, so we can
+						// assume that any pending forwards that would have a None channel_id are
+						// cleared out before reaching this version.
+						forward: forward_opt.unwrap_or(PaymentForwardedType::SourceRouted {
+							incoming_claimed: HTLCLocator {
+								channel_id: prev_channel_id_legacy
+									.ok_or(msgs::DecodeError::InvalidValue)?,
+								user_channel_id: prev_user_channel_id_legacy,
+								node_id: prev_node_id_legacy,
+							},
+							outgoing_fulfilled: HTLCLocator {
+								channel_id: next_channel_id_legacy
+									.ok_or(msgs::DecodeError::InvalidValue)?,
+								user_channel_id: next_user_channel_id_legacy,
+								node_id: next_node_id_legacy,
+							},
+						}),
 						total_fee_earned_msat,
 						skimmed_fee_msat,
 						claim_from_onchain_tx,

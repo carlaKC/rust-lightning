@@ -50,7 +50,7 @@ use crate::chain::transaction::{OutPoint, TransactionData};
 use crate::chain::{BestBlock, ChannelMonitorUpdateStatus, Confirm, Watch};
 use crate::events::{
 	self, ClosureReason, Event, EventHandler, EventsProvider, HTLCHandlingFailureType,
-	InboundChannelFunds, PaymentFailureReason, ReplayEvent,
+	InboundChannelFunds, PaymentFailureReason, PaymentForwardedType, ReplayEvent,
 };
 use crate::events::{FundingInfo, PaidBolt12Invoice};
 use crate::ln::chan_utils::selected_commitment_sat_per_1000_weight;
@@ -8878,11 +8878,9 @@ where
 		next_channel_counterparty_node_id: PublicKey, next_channel_outpoint: OutPoint,
 		next_channel_id: ChannelId, next_user_channel_id: Option<u128>,
 		hop_data: HTLCPreviousHopData, attribution_data: Option<AttributionData>,
-		send_timestamp: Option<Duration>,
+		send_timestamp: Option<Duration>, forward: PaymentForwardedType,
 	) {
 		let prev_channel_id = hop_data.channel_id;
-		let prev_user_channel_id = hop_data.user_channel_id;
-		let prev_node_id = hop_data.counterparty_node_id;
 		let completed_blocker = RAAMonitorUpdateBlockingAction::from_prev_hop_data(&hop_data);
 
 		// Obtain hold time, if available.
@@ -8992,21 +8990,50 @@ where
 						skimmed_fee_msat <= total_fee_earned_msat,
 						"skimmed_fee_msat must always be included in total_fee_earned_msat"
 					);
+
+					// assert that hop_data is in prev_htlcs and next stuff is in next_htlcs
+					// TODO(CKC) move this all into a debug block
+					let (prev_htlcs, next_htlcs, claimed) = match forward {
+						PaymentForwardedType::SourceRouted {
+							incoming_claimed,
+							outgoing_fulfilled,
+						} => (vec![incoming_claimed], vec![outgoing_fulfilled], outgoing_fulfilled),
+						PaymentForwardedType::TrampolineRouted {
+							prev_htlcs,
+							next_htlcs,
+							incoming_claimed,
+							..
+						} => (prev_htlcs, next_htlcs, incoming_claimed),
+					};
+
+					// The previous and next HTLC provided must be contained in the forward's set
+					// of incoming/outgoing htlcs.
+					debug_assert!(prev_htlcs
+						.into_iter()
+						.find(|htlc| {
+							htlc.node_id == hop_data.counterparty_node_id
+								&& htlc.user_channel_id == hop_data.user_channel_id
+								&& htlc.channel_id == hop_data.channel_id
+						})
+						.is_some());
+
+					debug_assert!(next_htlcs
+						.into_iter()
+						.find(|htlc| {
+							htlc.node_id == Some(next_channel_counterparty_node_id)
+								&& htlc.user_channel_id == next_user_channel_id
+								&& htlc.channel_id == next_channel_id
+						})
+						.is_some());
+
+					debug_assert_eq!(claimed.channel_id, hop_data.channel_id);
+					debug_assert_eq!(claimed.user_channel_id, hop_data.user_channel_id);
+					debug_assert_eq!(claimed.node_id, hop_data.counterparty_node_id);
+
 					(
 						Some(MonitorUpdateCompletionAction::EmitEventAndFreeOtherChannel {
 							event: events::Event::PaymentForwarded {
-								forward: events::PaymentForwardedType::SourceRouted {
-									incoming_claimed: events::HTLCLocator {
-										channel_id: prev_channel_id,
-										user_channel_id: prev_user_channel_id,
-										node_id: prev_node_id,
-									},
-									outgoing_fulfilled: events::HTLCLocator {
-										channel_id: next_channel_id,
-										user_channel_id: next_user_channel_id,
-										node_id: Some(next_channel_counterparty_node_id),
-									},
-								},
+								forward,
 								total_fee_earned_msat,
 								skimmed_fee_msat,
 								claim_from_onchain_tx: from_onchain,

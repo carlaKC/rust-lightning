@@ -62,7 +62,7 @@ use crate::ln::interactivetxs::{
 	InteractiveTxSigningSession, NegotiationError, SharedOwnedInput, SharedOwnedOutput,
 	TX_COMMON_FIELDS_WEIGHT,
 };
-use crate::ln::msgs::{self, accountable_from_bool};
+use crate::ln::msgs;
 use crate::ln::msgs::{ClosingSigned, ClosingSignedFeeRange, DecodeError, OnionErrorPacket};
 use crate::ln::onion_utils::{
 	AttributionData, HTLCFailReason, LocalHTLCFailureReason, HOLD_TIME_UNIT_MILLIS,
@@ -9722,7 +9722,7 @@ where
 					skimmed_fee_msat: htlc.skimmed_fee_msat,
 					blinding_point: htlc.blinding_point,
 					hold_htlc: htlc.hold_htlc,
-					accountable: accountable_from_bool(htlc.accountable),
+					accountable: Some(htlc.accountable),
 				});
 			}
 		}

@@ -15,7 +15,7 @@ use crate::ln::channelmanager::{
 	BlindedFailure, BlindedForward, HTLCFailureMsg, PendingHTLCInfo, PendingHTLCRouting,
 	CLTV_FAR_FAR_AWAY, MIN_CLTV_EXPIRY_DELTA,
 };
-use crate::ln::msgs::{self, accountable_into_bool};
+use crate::ln::msgs;
 use crate::ln::onion_utils;
 use crate::ln::onion_utils::{HTLCFailReason, LocalHTLCFailureReason, ONION_DATA_LEN};
 use crate::sign::{NodeSigner, Recipient};
@@ -267,7 +267,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 		outgoing_amt_msat: amt_to_forward,
 		outgoing_cltv_value,
 		skimmed_fee_msat: None,
-		incoming_accountable: accountable_into_bool(msg.accountable),
+		incoming_accountable: msg.accountable.unwrap_or(false),
 	})
 }
 
@@ -523,7 +523,7 @@ where
 			create_recv_pending_htlc_info(
 				hop, shared_secret, msg.payment_hash, msg.amount_msat, msg.cltv_expiry,
 				None, allow_skimmed_fees, msg.skimmed_fee_msat,
-				accountable_into_bool(msg.accountable), cur_height,
+				msg.accountable.unwrap_or(false), cur_height,
 			)?
 		}
 	})

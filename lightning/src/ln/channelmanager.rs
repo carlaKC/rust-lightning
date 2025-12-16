@@ -68,8 +68,8 @@ use crate::ln::inbound_payment;
 use crate::ln::interactivetxs::InteractiveTxMessageSend;
 use crate::ln::msgs;
 use crate::ln::msgs::{
-	accountable_into_bool, BaseMessageHandler, ChannelMessageHandler, CommitmentUpdate,
-	DecodeError, LightningError, MessageSendEvent,
+	BaseMessageHandler, ChannelMessageHandler, CommitmentUpdate, DecodeError, LightningError,
+	MessageSendEvent,
 };
 use crate::ln::onion_payment::{
 	check_incoming_htlc_cltv, create_fwd_pending_htlc_info, create_recv_pending_htlc_info,
@@ -5103,7 +5103,7 @@ where
 				let current_height: u32 = self.best_block.read().unwrap().height;
 				create_recv_pending_htlc_info(decoded_hop, shared_secret, msg.payment_hash,
 					msg.amount_msat, msg.cltv_expiry, None, allow_underpay, msg.skimmed_fee_msat,
-					accountable_into_bool(msg.accountable), current_height)
+					msg.accountable.unwrap_or(false), current_height)
 			},
 			onion_utils::Hop::Forward { .. } | onion_utils::Hop::BlindedForward { .. } => {
 				create_fwd_pending_htlc_info(msg, decoded_hop, shared_secret, next_packet_pubkey_opt)

@@ -774,22 +774,39 @@ pub struct UpdateAddHTLC {
 	/// Note that this field is [`experimental`] so should not be used for forwarding decisions.
 	///
 	/// [`experimental`]: https://github.com/lightning/blips/blob/master/blip-0004.md
-	pub accountable: ExperimentalAccountable,
+	pub accountable: Option<bool>,
 }
 
-/// Represents the value sent on the wire to signal experimental accountability. For historical
-/// reasons the least significant three bits are used to represent the accountable signal's value,
-/// though it is now only interpreted as a binary value.
-pub type ExperimentalAccountable = Option<u8>;
+struct AccountableBool<T>(T);
 
-/// Converts a boolean accountable signal to its wire representation.
-pub fn accountable_from_bool(value: bool) -> ExperimentalAccountable {
-	Some(if value { 7 } else { 0 })
+impl Writeable for AccountableBool<bool> {
+	#[inline]
+	fn write<W: Writer>(&self, writer: &mut W) -> Result<(), io::Error> {
+		let wire_value = if self.0 { 7u8 } else { 0u8 };
+		writer.write_all(&[wire_value])
+	}
 }
 
-/// Converts the accountable signal on the wire to a boolean signal.
-pub fn accountable_into_bool(accountable: ExperimentalAccountable) -> bool {
-	accountable.is_some_and(|v| v == 7)
+impl Readable for AccountableBool<bool> {
+	#[inline]
+	fn read<R: Read>(reader: &mut R) -> Result<AccountableBool<bool>, DecodeError> {
+		let mut buf = [0u8; 1];
+		reader.read_exact(&mut buf)?;
+		let bool_value = buf[0] == 7;
+		Ok(AccountableBool(bool_value))
+	}
+}
+
+impl From<bool> for AccountableBool<bool> {
+	fn from(val: bool) -> Self {
+		Self(val)
+	}
+}
+
+impl From<AccountableBool<bool>> for bool {
+	fn from(val: AccountableBool<bool>) -> Self {
+		val.0
+	}
 }
 
 /// An [`onion message`] to be sent to or received from a peer.
@@ -3395,7 +3412,7 @@ impl_writeable_msg!(UpdateAddHTLC, {
 	// TODO: currently we may fail to read the `ChannelManager` if we write a new even TLV in this message
 	// and then downgrade. Once this is fixed, update the type here to match BOLTs PR 989.
 	(75537, hold_htlc, option),
-	(106823, accountable, option),
+	(106823, accountable, (option, encoding: (bool, AccountableBool))),
 });
 
 impl LengthReadable for OnionMessage {
@@ -4395,7 +4412,7 @@ mod tests {
 	};
 	use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 	use crate::util::ser::{BigSize, Hostname, LengthReadable, Readable, ReadableArgs, Writeable};
-	use crate::util::test_utils;
+	use crate::util::test_utils::{self, pubkey};
 	use bitcoin::hex::DisplayHex;
 	use bitcoin::{Amount, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Witness};
 
@@ -6785,5 +6802,72 @@ mod tests {
 		}
 		.to_socket_addrs()
 		.is_err());
+	}
+
+	fn test_update_add_htlc() -> msgs::UpdateAddHTLC {
+		msgs::UpdateAddHTLC {
+			channel_id: ChannelId::from_bytes([2; 32]),
+			htlc_id: 42,
+			amount_msat: 1000,
+			payment_hash: PaymentHash([1; 32]),
+			cltv_expiry: 500000,
+			skimmed_fee_msat: None,
+			onion_routing_packet: msgs::OnionPacket {
+				version: 0,
+				public_key: Ok(pubkey(42)),
+				hop_data: [1; 20 * 65],
+				hmac: [2; 32],
+			},
+			blinding_point: None,
+			hold_htlc: None,
+			accountable: None,
+		}
+	}
+
+	#[test]
+	fn test_update_add_htlc_accountable_encoding() {
+		// Tests that accountable boolean values are written to the wire with correct u8 values.
+		for (bool_signal, wire_value) in [(Some(false), 0u8), (Some(true), 7u8)] {
+			let mut base_msg = test_update_add_htlc();
+			base_msg.accountable = bool_signal;
+			let encoded = base_msg.encode();
+			assert_eq!(
+				*encoded.last().unwrap(),
+				wire_value,
+				"wrong wire value for accountable={:?}",
+				bool_signal
+			);
+		}
+	}
+
+	fn do_test_htlc_accountable_from_u8(accountable_override: Option<u8>, expected: Option<bool>) {
+		// Tests custom encoding conversion of u8 wire values to appropriate boolean, manually
+		// writing to support values that we wouldn't encode ourselves but should be able to read.
+		let base_msg = test_update_add_htlc();
+		let mut encoded = base_msg.encode();
+		if let Some(value) = accountable_override {
+			encoded.extend_from_slice(&[0xfe, 0x00, 0x01, 0xa1, 0x47]);
+			encoded.push(1);
+			encoded.push(value);
+		}
+
+		let decoded: msgs::UpdateAddHTLC =
+			LengthReadable::read_from_fixed_length_buffer(&mut &encoded[..]).unwrap();
+
+		assert_eq!(
+			decoded.accountable, expected,
+			"accountable={:?} with override={:?} not eq to expected={:?}",
+			decoded.accountable, accountable_override, expected
+		);
+	}
+
+	#[test]
+	fn update_add_htlc_accountable_from_u8() {
+		// Tests that accountable signals encoded as a u8 are properly translated to a bool.
+		do_test_htlc_accountable_from_u8(None, None);
+		do_test_htlc_accountable_from_u8(Some(8), Some(false)); // 8 is an invalid value
+		do_test_htlc_accountable_from_u8(Some(7), Some(true));
+		do_test_htlc_accountable_from_u8(Some(3), Some(false));
+		do_test_htlc_accountable_from_u8(Some(0), Some(false));
 	}
 }

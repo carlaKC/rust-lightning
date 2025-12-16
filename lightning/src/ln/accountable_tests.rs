@@ -2,11 +2,11 @@ use crate::ln::channelmanager::{
 	HTLCForwardInfo, PaymentId, PendingAddHTLCInfo, PendingHTLCInfo, RecipientOnionFields, Retry,
 };
 use crate::ln::functional_test_utils::*;
-use crate::ln::msgs::{accountable_from_bool, ChannelMessageHandler, ExperimentalAccountable};
+use crate::ln::msgs::ChannelMessageHandler;
 use crate::routing::router::{PaymentParameters, RouteParameters};
 
 fn test_accountable_forwarding_with_override(
-	override_accountable: ExperimentalAccountable, expected_forwarded: bool,
+	override_accountable: Option<bool>, expected_forwarded: bool,
 ) {
 	let chanmon_cfgs = create_chanmon_cfgs(3);
 	let node_cfgs = create_node_cfgs(3, &chanmon_cfgs);
@@ -32,7 +32,7 @@ fn test_accountable_forwarding_with_override(
 	let updates_ab = get_htlc_update_msgs(&nodes[0], &nodes[1].node.get_our_node_id());
 	assert_eq!(updates_ab.update_add_htlcs.len(), 1);
 	let mut htlc_ab = updates_ab.update_add_htlcs[0].clone();
-	assert_eq!(htlc_ab.accountable, accountable_from_bool(false));
+	assert_eq!(htlc_ab.accountable, Some(false));
 
 	// Override accountable value if requested
 	if let Some(override_value) = override_accountable {
@@ -47,11 +47,11 @@ fn test_accountable_forwarding_with_override(
 	let updates_bc = get_htlc_update_msgs(&nodes[1], &nodes[2].node.get_our_node_id());
 	assert_eq!(updates_bc.update_add_htlcs.len(), 1);
 	let htlc_bc = &updates_bc.update_add_htlcs[0];
-	let expected_acountable_signal = accountable_from_bool(expected_forwarded);
 	assert_eq!(
-		htlc_bc.accountable, expected_acountable_signal,
+		htlc_bc.accountable,
+		Some(expected_forwarded),
 		"B -> C should have accountable = {:?}",
-		expected_acountable_signal
+		expected_forwarded
 	);
 
 	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), htlc_bc);
@@ -86,6 +86,6 @@ fn test_accountable_forwarding_with_override(
 fn test_accountable_signal() {
 	// Tests forwarding of accountable signal for various incoming signal values.
 	test_accountable_forwarding_with_override(None, false);
-	test_accountable_forwarding_with_override(Some(7), true);
-	test_accountable_forwarding_with_override(Some(3), false);
+	test_accountable_forwarding_with_override(Some(true), true);
+	test_accountable_forwarding_with_override(Some(false), false);
 }

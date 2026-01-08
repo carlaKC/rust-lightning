@@ -18,7 +18,7 @@ use crate::blinded_path::{IntroductionNode, NodeIdLookUp};
 use crate::events::{self, PaidBolt12Invoice, PaymentFailureReason};
 use crate::ln::channel_state::ChannelDetails;
 use crate::ln::channelmanager::{
-	EventCompletionAction, HTLCPreviousHopData, HTLCSource, PaymentCompleteUpdate,PaymentId,
+	EventCompletionAction, HTLCPreviousHopData, HTLCSource, PaymentCompleteUpdate, PaymentId,
 };
 use crate::ln::msgs::TrampolineOnionPacket;
 use crate::ln::onion_utils;
@@ -1559,13 +1559,11 @@ where
 		ES: Deref,
 		IH,
 		SP,
-		L: Deref,
 	>(
 		&self, payment_id: PaymentId, payment_hash: PaymentHash,
 		trampoline_forward_info: TrampolineForwardInfo, retry_strategy: Retry,
 		mut route_params: RouteParameters, router: &R, first_hops: Vec<ChannelDetails>,
 		inflight_htlcs: IH, entropy_source: &ES, node_signer: &NS, best_block_height: u32,
-		logger: &L,
 		pending_events: &Mutex<VecDeque<(events::Event, Option<EventCompletionAction>)>>,
 		send_payment_along_path: SP,
 	) -> Result<(), RetryableSendFailure>
@@ -1573,7 +1571,6 @@ where
 		R::Target: Router,
 		ES::Target: EntropySource,
 		NS::Target: NodeSigner,
-		L::Target: Logger,
 		IH: Fn() -> InFlightHtlcs,
 		SP: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
@@ -1593,7 +1590,6 @@ where
 			&inflight_htlcs,
 			node_signer,
 			best_block_height,
-			logger,
 		)?;
 
 		let onion_session_privs = self
@@ -1612,7 +1608,7 @@ where
 			)
 			.map_err(|_| {
 				log_error!(
-					logger,
+					self.logger,
 					"Payment with id {} is already pending. New payment had payment hash {}",
 					payment_id,
 					payment_hash
@@ -1631,12 +1627,13 @@ where
 			payment_id,
 			None,
 			&onion_session_privs,
+			false,
 			node_signer,
 			best_block_height,
 			&send_payment_along_path,
 		);
 		log_info!(
-			logger,
+			self.logger,
 			"Sending payment with id {} and hash {} returned {:?}",
 			payment_id,
 			payment_hash,
@@ -1656,7 +1653,6 @@ where
 				entropy_source,
 				node_signer,
 				best_block_height,
-				logger,
 				pending_events,
 				&send_payment_along_path,
 			);
@@ -1669,12 +1665,12 @@ where
 		&self, payment_hash: PaymentHash, payment_id: PaymentId, route_params: RouteParameters,
 		router: &R, first_hops: Vec<ChannelDetails>, inflight_htlcs: &IH, entropy_source: &ES,
 		node_signer: &NS, best_block_height: u32,
+		pending_events: &Mutex<VecDeque<(events::Event, Option<EventCompletionAction>)>>, send_payment_along_path: &SP,
 	)
 	where
 		R::Target: Router,
 		ES::Target: EntropySource,
 		NS::Target: NodeSigner,
-		L::Target: Logger,
 		IH: Fn() -> InFlightHtlcs,
 		SP: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
@@ -2538,15 +2534,14 @@ where
 		path: &Path, session_priv: &SecretKey, payment_id: &PaymentId,
 		secp_ctx: &Secp256k1<secp256k1::All>,
 		_pending_events: &Mutex<VecDeque<(events::Event, Option<EventCompletionAction>)>>,
-	) -> bool
-	{
+	) -> bool {
 		#[cfg(any(test, feature = "_test_utils"))]
 		let DecodedOnionFailure {
 			short_channel_id,
 			payment_failed_permanently,
 			failed_within_blinded_path,
 			..
-		} = onion_error.decode_onion_failure(secp_ctx, self.logger, &source);
+		} = onion_error.decode_onion_failure(secp_ctx, &self.logger, &source);
 
 		#[cfg(not(any(test, feature = "_test_utils")))]
 		let DecodedOnionFailure {
@@ -2554,7 +2549,7 @@ where
 			payment_failed_permanently,
 			failed_within_blinded_path,
 			..
-		} = onion_error.decode_onion_failure(secp_ctx, self.logger, &source);
+		} = onion_error.decode_onion_failure(secp_ctx, &self.logger, &source);
 
 		let mut session_priv_bytes = [0; 32];
 		session_priv_bytes.copy_from_slice(&session_priv[..]);
@@ -2635,7 +2630,11 @@ where
 				return true;
 			};
 		core::mem::drop(outbounds);
-		log_trace!(self.logger, "Failing Trampoline forward HTLC with payment_hash {}", &payment_hash);
+		log_trace!(
+			self.logger,
+			"Failing Trampoline forward HTLC with payment_hash {}",
+			&payment_hash
+		);
 
 		// If we miss abandoning the payment above, we *must* generate an event here or else the
 		// payment will sit in our outbounds forever.

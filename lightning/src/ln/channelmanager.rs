@@ -7893,7 +7893,7 @@ where
 		'next_forwardable_htlc: for forward_info in pending_forwards.drain(..) {
 			match forward_info {
 				HTLCForwardInfo::AddHTLC(PendingAddHTLCInfo {
-					prev_short_channel_id,
+					prev_outbound_scid_alias,
 					prev_htlc_id,
 					prev_channel_id,
 					prev_funding_outpoint,
@@ -7925,15 +7925,16 @@ where
 						)
 						.unwrap(),
 						previous_hop_data: vec![HTLCPreviousHopData {
-							short_channel_id: prev_short_channel_id,
+							prev_outbound_scid_alias,
 							user_channel_id: Some(prev_user_channel_id),
-							counterparty_node_id: prev_counterparty_node_id,
+							counterparty_node_id: Some(prev_counterparty_node_id),
 							channel_id: prev_channel_id,
 							outpoint: prev_funding_outpoint,
 							htlc_id: prev_htlc_id,
 							incoming_packet_shared_secret: incoming_outer_shared_secret,
 							// Phantom payments are only PendingHTLCRouting::Receive.
 							phantom_shared_secret: None,
+							trampoline_shared_secret: Some(incoming_trampoline_shared_secret),
 							blinded_failure: blinded.map(|b| b.failure),
 							cltv_expiry: Some(incoming_cltv_expiry),
 						}],
@@ -7964,9 +7965,8 @@ where
 								htlc_source,
 								payment_hash,
 								HTLCFailReason::reason(reason, err_data),
-								HTLCHandlingFailureType::FailedTrampolineForward {
-									requested_next_node_id: next_node_id,
-									forward_scid,
+								HTLCHandlingFailureType::TrampolineForward {
+									attempted_htlcs: vec![], // TODO
 								},
 							));
 						};
@@ -7996,12 +7996,12 @@ where
 					};
 
 					let proportional_fee = self
-						.default_configuration
+						.config.read().unwrap()
 						.channel_config
 						.forwarding_fee_proportional_millionths as u64
 						* outgoing_amt_msat / 1_000_000;
 					let forwarding_fee = proportional_fee
-						+ self.default_configuration.channel_config.forwarding_fee_base_msat as u64;
+						+ self.config.read().unwrap().channel_config.forwarding_fee_base_msat as u64;
 					let cltv_expiry_delta = incoming_cltv_expiry - outgoing_cltv_value;
 
 					let max_total_routing_fee_msat = match incoming_amount
@@ -8053,15 +8053,18 @@ where
 									blinding_point: next_blinding_point,
 								},
 								previous_hop_data: vec![HTLCPreviousHopData {
-									short_channel_id: prev_short_channel_id,
+									prev_outbound_scid_alias: prev_outbound_scid_alias,
 									user_channel_id: Some(prev_user_channel_id),
-									counterparty_node_id: prev_counterparty_node_id,
+									counterparty_node_id: Some(prev_counterparty_node_id),
 									channel_id: prev_channel_id,
 									outpoint: prev_funding_outpoint,
 									htlc_id: prev_htlc_id,
 									incoming_packet_shared_secret: incoming_outer_shared_secret,
 									// Phantom payments are only PendingHTLCRouting::Receive.
 									phantom_shared_secret: None,
+									trampoline_shared_secret: Some(
+										incoming_trampoline_shared_secret,
+									),
 									blinded_failure: blinded.map(|b| b.failure),
 									cltv_expiry: Some(incoming_cltv_expiry),
 								}],
@@ -8075,7 +8078,6 @@ where
 							&self.entropy_source,
 							&self.node_signer,
 							self.current_best_block().height,
-							&self.logger,
 							&self.pending_events,
 							|args| self.send_payment_along_path(args),
 						);
@@ -8105,8 +8107,7 @@ where
 								..
 							},
 						..
-					}
-				} => {
+					} = payment;
 					let blinded_failure = routing.blinded_failure();
 					let (
 						cltv_expiry,
@@ -9091,55 +9092,54 @@ where
 					payment_id,
 					&self.secp_ctx,
 					&self.pending_events,
-					&self.logger,
 				);
 
 				if should_fail_backwards {
-
-					let incoming_trampoline_shared_secret = Some(*incoming_trampoline_shared_secret);
-				for current_hop_data in previous_hop_data {
-					let incoming_packet_shared_secret =
-						&current_hop_data.incoming_packet_shared_secret;
-					let channel_id = &current_hop_data.channel_id;
-					let short_channel_id = &current_hop_data.prev_outbound_scid_alias;
-					let htlc_id = &current_hop_data.htlc_id;
-					let blinded_failure = &current_hop_data.blinded_failure;
-					log_trace!(
+					let incoming_trampoline_shared_secret =
+						Some(*incoming_trampoline_shared_secret);
+					for current_hop_data in previous_hop_data {
+						let incoming_packet_shared_secret =
+							&current_hop_data.incoming_packet_shared_secret;
+						let channel_id = &current_hop_data.channel_id;
+						let short_channel_id = &current_hop_data.prev_outbound_scid_alias;
+						let htlc_id = &current_hop_data.htlc_id;
+						let blinded_failure = &current_hop_data.blinded_failure;
+						log_trace!(
 						WithContext::from(&self.logger, None, Some(*channel_id), Some(*payment_hash)),
 						"Failing {}HTLC with payment_hash {} backwards from us following Trampoline forwarding failure: {:?}",
 						if blinded_failure.is_some() { "blinded " } else { "" }, &payment_hash, onion_error
 					);
-					let onion_error = HTLCFailReason::reason(
-						LocalHTLCFailureReason::TemporaryTrampolineFailure,
-						Vec::new(),
-					);
-					push_forward_htlcs_failure(
-						*short_channel_id,
-						get_htlc_forward_failure(
-							blinded_failure,
-							&onion_error,
-							incoming_packet_shared_secret,
-							&incoming_trampoline_shared_secret,
-							&None,
-							*htlc_id,
-						),
-					);
-				}
+						let onion_error = HTLCFailReason::reason(
+							LocalHTLCFailureReason::TemporaryTrampolineFailure,
+							Vec::new(),
+						);
+						push_forward_htlcs_failure(
+							*short_channel_id,
+							get_htlc_forward_failure(
+								blinded_failure,
+								&onion_error,
+								incoming_packet_shared_secret,
+								&incoming_trampoline_shared_secret,
+								&None,
+								*htlc_id,
+							),
+						);
+					}
 
-				// We only want to emit a single event for trampoline failures, so we do it once
-				// we've failed back all of our incoming HTLCs.
-				let mut pending_events = self.pending_events.lock().unwrap();
-				pending_events.push_back((
-					events::Event::HTLCHandlingFailed {
-						prev_channel_ids: previous_hop_data
-							.iter()
-							.map(|prev| prev.channel_id)
-							.collect(),
-						failure_type,
-						failure_reason: Some(onion_error.into()),
-					},
-					None,
-				));
+					// We only want to emit a single event for trampoline failures, so we do it once
+					// we've failed back all of our incoming HTLCs.
+					let mut pending_events = self.pending_events.lock().unwrap();
+					pending_events.push_back((
+						events::Event::HTLCHandlingFailed {
+							prev_channel_ids: previous_hop_data
+								.iter()
+								.map(|prev| prev.channel_id)
+								.collect(),
+							failure_type,
+							failure_reason: Some(onion_error.into()),
+						},
+						None,
+					));
 				}
 			},
 		}
@@ -18537,58 +18537,6 @@ where
 										htlc.payment_hash,
 										monitor.channel_id(),
 									);
-								}
-							},
-							HTLCSource::TrampolineForward { previous_hop_data, .. } => {
-								for current_previous_hop_data in previous_hop_data {
-									let pending_forward_matches_htlc =
-										|info: &PendingAddHTLCInfo| {
-											info.prev_funding_outpoint
-												== current_previous_hop_data.outpoint && info
-												.prev_htlc_id
-												== current_previous_hop_data.htlc_id
-										};
-									// The ChannelMonitor is now responsible for this HTLC's
-									// failure/success and will let us know what its outcome is. If we
-									// still have an entry for this HTLC in `forward_htlcs` or
-									// `pending_intercepted_htlcs`, we were apparently not persisted after
-									// the monitor was when forwarding the payment.
-									decode_update_add_htlcs.retain(|scid, update_add_htlcs| {
-									update_add_htlcs.retain(|update_add_htlc| {
-										let matches = *scid == current_previous_hop_data.short_channel_id &&
-											update_add_htlc.htlc_id == current_previous_hop_data.htlc_id;
-										if matches {
-											log_info!(logger, "Removing pending to-decode HTLC with hash {} as it was forwarded to the closed channel {}",
-												&htlc.payment_hash, &monitor.channel_id());
-										}
-										!matches
-									});
-									!update_add_htlcs.is_empty()
-								});
-									forward_htlcs.retain(|_, forwards| {
-									forwards.retain(|forward| {
-										if let HTLCForwardInfo::AddHTLC(htlc_info) = forward {
-											if pending_forward_matches_htlc(&htlc_info) {
-												log_info!(logger, "Removing pending to-forward HTLC with hash {} as it was forwarded to the closed channel {}",
-													&htlc.payment_hash, &monitor.channel_id());
-												false
-											} else { true }
-										} else { true }
-									});
-									!forwards.is_empty()
-								});
-									pending_intercepted_htlcs.as_mut().unwrap().retain(|intercepted_id, htlc_info| {
-									if pending_forward_matches_htlc(&htlc_info) {
-										log_info!(logger, "Removing pending intercepted HTLC with hash {} as it was forwarded to the closed channel {}",
-											&htlc.payment_hash, &monitor.channel_id());
-										pending_events_read.retain(|(event, _)| {
-											if let Event::HTLCIntercepted { intercept_id: ev_id, .. } = event {
-												intercepted_id != ev_id
-											} else { true }
-										});
-										false
-									} else { true }
-								});
 								}
 							},
 							HTLCSource::OutboundRoute {

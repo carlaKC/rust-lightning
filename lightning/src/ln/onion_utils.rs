@@ -1093,7 +1093,7 @@ where
 			logger,
 			path,
 			&outer_session_priv,
-			Some(primary_session_priv),
+			Some(*primary_session_priv),
 			encrypted_packet,
 		)
 	} else {

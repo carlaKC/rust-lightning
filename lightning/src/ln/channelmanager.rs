@@ -774,6 +774,8 @@ mod fuzzy_channelmanager {
 			/// In order to decode inter-Trampoline errors, we need to store the session_priv key
 			/// given we're effectively creating new outbound routes.
 			session_priv: SecretKey,
+			/// We might need to retry payments, therefore we need a way to track it.
+			payment_id: PaymentId,
 		},
 		OutboundRoute {
 			path: Path,
@@ -852,12 +854,14 @@ impl core::hash::Hash for HTLCSource {
 				incoming_trampoline_shared_secret,
 				hops,
 				session_priv,
+				payment_id,
 			} => {
 				2u8.hash(hasher);
 				previous_hop_data.hash(hasher);
 				incoming_trampoline_shared_secret.hash(hasher);
 				hops.hash(hasher);
 				session_priv[..].hash(hasher);
+				payment_id.hash(hasher);
 			},
 		}
 	}
@@ -16680,17 +16684,20 @@ impl Readable for HTLCSource {
 				let mut incoming_trampoline_shared_secret: crate::util::ser::RequiredWrapper<[u8; 32]> = crate::util::ser::RequiredWrapper(None);
 				let mut session_priv: crate::util::ser::RequiredWrapper<SecretKey> = crate::util::ser::RequiredWrapper(None);
 				let mut hops = Vec::new();
+				let mut payment_id: crate::util::ser::RequiredWrapper<PaymentId> = crate::util::ser::RequiredWrapper(None);
 				read_tlv_fields!(reader, {
 					(0, previous_hop_data, required_vec),
 					(2, incoming_trampoline_shared_secret, required),
 					(4, session_priv, required),
 					(6, hops, required_vec),
+					(8, payment_id, required),
 				});
 				Ok(HTLCSource::TrampolineForward {
 					previous_hop_data,
 					incoming_trampoline_shared_secret: incoming_trampoline_shared_secret.0.unwrap(),
 					hops,
 					session_priv: session_priv.0.unwrap(),
+					payment_id: payment_id.0.unwrap(),
 				})
 			},
 			_ => Err(DecodeError::UnknownRequiredFeature),
@@ -16730,6 +16737,7 @@ impl Writeable for HTLCSource {
 				incoming_trampoline_shared_secret,
 				ref session_priv,
 				ref hops,
+				payment_id,
 			} => {
 				2u8.write(writer)?;
 				write_tlv_fields!(writer, {
@@ -16737,6 +16745,7 @@ impl Writeable for HTLCSource {
 					(2, incoming_trampoline_shared_secret, required),
 					(4, session_priv, required),
 					(6, *hops, required_vec),
+					(8, payment_id, required),
 				});
 			},
 		}

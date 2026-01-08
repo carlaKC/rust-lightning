@@ -7,9 +7,7 @@
 // You may not use this file except in accordance with one or both of these
 // licenses.
 
-//! Low-level onion manipulation logic and fields
-
-use super::msgs::OnionErrorPacket;
+use super::msgs::{FinalOnionHopData, OnionErrorPacket};
 use crate::blinded_path::BlindedHop;
 use crate::crypto::chacha20::ChaCha20;
 use crate::crypto::streams::ChaChaReader;
@@ -17,12 +15,13 @@ use crate::events::HTLCHandlingFailureReason;
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs::{self, DecodeError};
+use crate::ln::outbound_payment::NextTrampolineHopInfo;
 use crate::offers::invoice_request::InvoiceRequest;
 use crate::routing::gossip::NetworkUpdate;
 use crate::routing::router::{BlindedTail, Path, RouteHop, RouteParameters, TrampolineHop};
 use crate::sign::{NodeSigner, Recipient};
 use crate::types::features::{ChannelFeatures, NodeFeatures};
-use crate::types::payment::{PaymentHash, PaymentPreimage};
+use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 use crate::util::errors::APIError;
 use crate::util::logger::Logger;
 use crate::util::ser::{
@@ -206,6 +205,7 @@ trait OnionPayload<'a, 'b> {
 	fn new_trampoline_entry(
 		total_msat: u64, amt_to_forward: u64, outgoing_cltv_value: u32,
 		recipient_onion: &'a RecipientOnionFields, packet: msgs::TrampolineOnionPacket,
+		blinding_point: Option<PublicKey>,
 	) -> Result<Self::ReceiveType, APIError>;
 }
 impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
@@ -255,17 +255,31 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 	fn new_trampoline_entry(
 		total_msat: u64, amt_to_forward: u64, outgoing_cltv_value: u32,
 		recipient_onion: &'a RecipientOnionFields, packet: msgs::TrampolineOnionPacket,
+		blinding_point: Option<PublicKey>,
 	) -> Result<Self, APIError> {
-		Ok(Self::TrampolineEntrypoint {
-			amt_to_forward,
-			outgoing_cltv_value,
-			multipath_trampoline_data: recipient_onion
-				.payment_secret
-				.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
-			trampoline_packet: packet,
-		})
+		if let Some(blinding_point) = blinding_point {
+			Ok(Self::BlindedTrampolineEntrypoint {
+				amt_to_forward,
+				outgoing_cltv_value,
+				multipath_trampoline_data: recipient_onion
+					.payment_secret
+					.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
+				trampoline_packet: packet,
+				current_path_key: blinding_point,
+			})
+		} else {
+			Ok(Self::TrampolineEntrypoint {
+				amt_to_forward,
+				outgoing_cltv_value,
+				multipath_trampoline_data: recipient_onion
+					.payment_secret
+					.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
+				trampoline_packet: packet,
+			})
+		}
 	}
 }
+
 impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundTrampolinePayload<'a> {
 	type PathHopForId = &'b TrampolineHop;
 	type ReceiveType = msgs::OutboundTrampolinePayload<'a>;
@@ -307,6 +321,7 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundTrampolinePayload<'a> {
 	fn new_trampoline_entry(
 		_total_msat: u64, _amt_to_forward: u64, _outgoing_cltv_value: u32,
 		_recipient_onion: &'a RecipientOnionFields, _packet: msgs::TrampolineOnionPacket,
+		_blinding_point: Option<PublicKey>,
 	) -> Result<Self::ReceiveType, APIError> {
 		Err(APIError::InvalidRoute {
 			err: "Trampoline onions cannot contain Trampoline entrypoints!".to_string(),
@@ -574,6 +589,7 @@ where
 							cur_cltv,
 							&recipient_onion,
 							trampoline_packet,
+							None,
 						)?,
 					);
 				},
@@ -1053,6 +1069,49 @@ mod fuzzy_onion_utils {
 pub use self::fuzzy_onion_utils::*;
 #[cfg(not(fuzzing))]
 pub(crate) use self::fuzzy_onion_utils::*;
+
+pub fn process_onion_failure<T: secp256k1::Signing, L: Deref>(
+	secp_ctx: &Secp256k1<T>, logger: &L, htlc_source: &HTLCSource,
+	encrypted_packet: OnionErrorPacket,
+) -> DecodedOnionFailure
+where
+	L::Target: Logger,
+{
+	let mut trampoline_forward_path_option = None;
+	let (path, primary_session_priv) = match htlc_source {
+		HTLCSource::OutboundRoute { ref path, ref session_priv, .. } => (path, session_priv),
+		HTLCSource::TrampolineForward { ref hops, ref session_priv, .. } => {
+			trampoline_forward_path_option.replace(Path { hops: hops.clone(), blinded_tail: None });
+			(trampoline_forward_path_option.as_ref().unwrap(), session_priv)
+		},
+		_ => unreachable!(),
+	};
+
+	if path.has_trampoline_hops() {
+		// If we have Trampoline hops, the outer onion session_priv is a hash of the inner one.
+		let session_priv_hash = Sha256::hash(&primary_session_priv.secret_bytes()).to_byte_array();
+		let outer_session_priv =
+			SecretKey::from_slice(&session_priv_hash[..]).expect("You broke SHA-256!");
+
+		process_onion_failure_inner(
+			secp_ctx,
+			logger,
+			path,
+			&primary_session_priv,
+			Some(outer_session_priv),// TOD: CHECK ORDER!
+			encrypted_packet,
+		)
+	} else {
+		process_onion_failure_inner(
+			secp_ctx,
+			logger,
+			path,
+			primary_session_priv,
+			None,
+			encrypted_packet,
+		)
+	}
+}
 
 /// Process failure we got back from upstream on a payment we sent (implying htlc_source is an
 /// OutboundRoute).
@@ -2550,11 +2609,63 @@ pub fn create_payment_onion<T: secp256k1::Signing>(
 	)
 }
 
-pub(super) fn compute_trampoline_session_priv(outer_onion_session_priv: &SecretKey) -> SecretKey {
-	// When creating the inner trampoline onion, we set the session priv to the hash of the outer
-	// onion session priv.
-	let session_priv_hash = Sha256::hash(&outer_onion_session_priv.secret_bytes()).to_byte_array();
-	SecretKey::from_slice(&session_priv_hash[..]).expect("You broke SHA-256!")
+pub(crate) fn create_trampoline_forward_onion<T: secp256k1::Signing>(
+	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey, total_msat: u64,
+	payment_secret: PaymentSecret, cur_block_height: u32, payment_hash: &PaymentHash,
+	keysend_preimage: &Option<PaymentPreimage>, trampoline_forward_info: &NextTrampolineHopInfo,
+	prng_seed: [u8; 32],
+) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
+	let recipient_onion = RecipientOnionFields::spontaneous_empty();
+	let (mut onion_payloads, htlc_msat, htlc_cltv) = build_onion_payloads(
+		&path,
+		path.final_value_msat(),
+		// we don't need a real recipient onion
+		&recipient_onion,
+		cur_block_height,
+		keysend_preimage,
+		None,
+		// TODO: find idiomatic way of that being considered without post-processing in this method
+		Some(trampoline_forward_info.onion_packet.clone()),
+	)?;
+
+	let multipath_trampoline_data = Some(FinalOnionHopData { payment_secret, total_msat });
+	if let Some(last_payload) = onion_payloads.last_mut() {
+		match last_payload {
+			msgs::OutboundOnionPayload::Receive {
+				sender_intended_htlc_amt_msat,
+				cltv_expiry_height,
+				..
+			} => {
+				*last_payload = match trampoline_forward_info.blinding_point {
+					None => msgs::OutboundOnionPayload::TrampolineEntrypoint {
+						amt_to_forward: *sender_intended_htlc_amt_msat,
+						outgoing_cltv_value: *cltv_expiry_height,
+						multipath_trampoline_data,
+						trampoline_packet: trampoline_forward_info.onion_packet.clone(),
+					},
+					Some(blinding_point) => {
+						msgs::OutboundOnionPayload::BlindedTrampolineEntrypoint {
+							amt_to_forward: *sender_intended_htlc_amt_msat,
+							outgoing_cltv_value: *cltv_expiry_height,
+							multipath_trampoline_data,
+							trampoline_packet: trampoline_forward_info.onion_packet.clone(),
+							current_path_key: blinding_point,
+						}
+					},
+				};
+			},
+			_ => {
+				unreachable!("Last element must always initially be of type Receive.");
+			},
+		}
+	}
+
+	let onion_keys = construct_onion_keys(&secp_ctx, &path, session_priv);
+	let onion_packet = construct_onion_packet(onion_payloads, onion_keys, prng_seed, payment_hash)
+		.map_err(|_| APIError::InvalidRoute {
+			err: "Route size too large considering onion data".to_owned(),
+		})?;
+	Ok((onion_packet, htlc_msat, htlc_cltv))
 }
 
 /// Build a payment onion, returning the first hop msat and cltv values as well.

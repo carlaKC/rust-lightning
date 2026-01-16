@@ -11,15 +11,16 @@
 
 use bitcoin::hashes::sha256::Hash as Sha256;
 use bitcoin::hashes::Hash;
-use bitcoin::secp256k1::{self, Secp256k1, SecretKey};
+use bitcoin::secp256k1::{self, PublicKey, Secp256k1, SecretKey};
 use lightning_invoice::Bolt11Invoice;
 
 use crate::blinded_path::{IntroductionNode, NodeIdLookUp};
 use crate::events::{self, PaidBolt12Invoice, PaymentFailureReason};
 use crate::ln::channel_state::ChannelDetails;
 use crate::ln::channelmanager::{
-	EventCompletionAction, HTLCSource, PaymentCompleteUpdate, PaymentId,
+	EventCompletionAction, HTLCPreviousHopData, HTLCSource, PaymentCompleteUpdate, PaymentId,
 };
+use crate::ln::msgs::TrampolineOnionPacket;
 use crate::ln::onion_utils;
 use crate::ln::onion_utils::{DecodedOnionFailure, HTLCFailReason};
 use crate::offers::invoice::{Bolt12Invoice, DerivedSigningPubkey, InvoiceBuilder};
@@ -124,6 +125,9 @@ pub(crate) enum PendingOutboundPayment {
 		// Storing the BOLT 12 invoice here to allow Proof of Payment after
 		// the payment is made.
 		bolt12_invoice: Option<PaidBolt12Invoice>,
+		// Storing forward information for trampoline payments in order to build next hop info
+		// or build error or claims to the origin.
+		trampoline_forward_info: Option<TrampolineForwardInfo>,
 		custom_tlvs: Vec<(u64, Vec<u8>)>,
 		pending_amt_msat: u64,
 		/// Used to track the fee paid. Present iff the payment was serialized on 0.0.103+.
@@ -158,6 +162,36 @@ pub(crate) enum PendingOutboundPayment {
 		total_msat: Option<u64>,
 	},
 }
+
+#[derive(Clone)]
+pub(crate) struct NextTrampolineHopInfo {
+	/// The Trampoline packet to include for the next Trampoline hop
+	pub(crate) onion_packet: TrampolineOnionPacket,
+	/// If blinded, the current_path_key to set at the next Trampoline hop
+	pub(crate) blinding_point: Option<PublicKey>,
+}
+
+impl_writeable_tlv_based!(NextTrampolineHopInfo, {
+	(1, onion_packet, required),
+	(3, blinding_point, option),
+});
+
+#[derive(Clone)]
+pub(crate) struct TrampolineForwardInfo {
+	/// Information necessary to construct the onion packet for the next Trampoline hop
+	pub(crate) next_hop_info: NextTrampolineHopInfo,
+	/// Upstream hop data to correctly propagate claims and errors back to the origin. If the
+	/// inbound payment was split up via MPP, the vector will contain an entry for each component.
+	pub(crate) previous_hop_data: Vec<HTLCPreviousHopData>,
+	/// The shared secret from the incoming trampoline onion, needed for error encryption
+	pub(crate) incoming_trampoline_shared_secret: [u8; 32],
+}
+
+impl_writeable_tlv_based!(TrampolineForwardInfo, {
+	(1, next_hop_info, required),
+	(3, previous_hop_data, required_vec),
+	(5, incoming_trampoline_shared_secret, required),
+});
 
 #[derive(Clone)]
 pub(crate) struct RetryableInvoiceRequest {
@@ -1923,6 +1957,7 @@ where
 			keysend_preimage,
 			invoice_request,
 			bolt12_invoice,
+			trampoline_forward_info: None,
 			custom_tlvs: recipient_onion.custom_tlvs,
 			starting_block_height: best_block_height,
 			total_msat: route.get_total_amount(),
@@ -2638,6 +2673,7 @@ where
 					keysend_preimage: None, // only used for retries, and we'll never retry on startup
 					invoice_request: None, // only used for retries, and we'll never retry on startup
 					bolt12_invoice: None, // only used for retries, and we'll never retry on startup!
+					trampoline_forward_info: None, // only used for retries, and we'll never retry on startup
 					custom_tlvs: Vec::new(), // only used for retries, and we'll never retry on startup
 					pending_amt_msat: path_amt,
 					pending_fee_msat: Some(path_fee),
@@ -2726,6 +2762,7 @@ impl_writeable_tlv_based_enum_upgradable!(PendingOutboundPayment,
 		(11, remaining_max_total_routing_fee_msat, option),
 		(13, invoice_request, option),
 		(15, bolt12_invoice, option),
+		(17, trampoline_forward_info, option),
 		(not_written, retry_strategy, (static_value, None)),
 		(not_written, attempts, (static_value, PaymentAttempts::new())),
 	},

@@ -5220,8 +5220,10 @@ where
 	) -> Result<(), LocalHTLCFailureReason> {
 		let outgoing_scid = match next_packet_details.outgoing_connector {
 			HopConnector::ShortChannelId(scid) => scid,
+			// We can't make forwarding checks on trampoline forwards where we don't know the
+			// outgoing channel on receipt of the incoming htlc.
 			HopConnector::Trampoline(_) => {
-				return Err(LocalHTLCFailureReason::InvalidTrampolineForward);
+				unreachable!();
 			}
 		};
 		match self.do_funded_channel_callback(outgoing_scid, |chan: &mut FundedChannel<SP>| {
@@ -7280,20 +7282,29 @@ where
 
 				// Now process the HTLC on the outgoing channel if it's a forward.
 				if let Some(next_packet_details) = next_packet_details_opt.as_ref() {
-					if let Err(reason) =
-						self.can_forward_htlc(&update_add_htlc, next_packet_details)
-					{
-						let htlc_fail = self.htlc_failure_from_update_add_err(
-							&update_add_htlc,
-							&incoming_counterparty_node_id,
-							reason,
-							is_intro_node_blinded_forward,
-							&shared_secret,
-						);
-						let failure_type =
-							get_htlc_failure_type(outgoing_scid_opt, update_add_htlc.payment_hash);
-						htlc_fails.push((htlc_fail, failure_type, reason.into()));
-						continue;
+					match next_packet_details.outgoing_connector {
+						HopConnector::ShortChannelId(_) => {
+							if let Err(reason) =
+								self.can_forward_htlc(&update_add_htlc, next_packet_details)
+							{
+								let htlc_fail = self.htlc_failure_from_update_add_err(
+									&update_add_htlc,
+									&incoming_counterparty_node_id,
+									reason,
+									is_intro_node_blinded_forward,
+									&shared_secret,
+								);
+								let failure_type = get_htlc_failure_type(
+									outgoing_scid_opt,
+									update_add_htlc.payment_hash,
+								);
+								htlc_fails.push((htlc_fail, failure_type, reason.into()));
+								continue;
+							}
+						},
+						// For trampoline payments, we don't know the outgoing channel yet so
+						// we don't have anything to check right now.
+						HopConnector::Trampoline(_) => {},
 					}
 				}
 

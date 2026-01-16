@@ -2528,6 +2528,123 @@ where
 		});
 	}
 
+	// Returns a bool indicating whether if we should fail the HTLC backwards.
+	pub(super) fn trampoline_htlc_failed(
+		&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason,
+		path: &Path, session_priv: &SecretKey, payment_id: &PaymentId,
+		secp_ctx: &Secp256k1<secp256k1::All>,
+		_pending_events: &Mutex<VecDeque<(events::Event, Option<EventCompletionAction>)>>,
+	) -> bool {
+		#[cfg(any(test, feature = "_test_utils"))]
+		let DecodedOnionFailure {
+			short_channel_id,
+			payment_failed_permanently,
+			failed_within_blinded_path,
+			..
+		} = onion_error.decode_onion_failure(secp_ctx, &self.logger, &source);
+
+		#[cfg(not(any(test, feature = "_test_utils")))]
+		let DecodedOnionFailure {
+			short_channel_id,
+			payment_failed_permanently,
+			failed_within_blinded_path,
+			..
+		} = onion_error.decode_onion_failure(secp_ctx, &self.logger, &source);
+
+		let mut session_priv_bytes = [0; 32];
+		session_priv_bytes.copy_from_slice(&session_priv[..]);
+		let mut outbounds = self.pending_outbound_payments.lock().unwrap();
+
+		// If any payments already need retry, there's no need to generate a redundant
+		// `PendingHTLCsForwardable`.
+		let already_awaiting_retry = outbounds.iter().any(|(_, pmt)| {
+			let mut awaiting_retry = false;
+			if pmt.is_auto_retryable_now() {
+				if let PendingOutboundPayment::Retryable { pending_amt_msat, total_msat, .. } = pmt
+				{
+					if pending_amt_msat < total_msat {
+						awaiting_retry = true;
+					}
+				}
+			}
+			awaiting_retry
+		});
+
+		let mut pending_retry_ev = false;
+		let attempts_remaining =
+			if let hash_map::Entry::Occupied(mut payment) = outbounds.entry(*payment_id) {
+				if !payment.get_mut().remove(&session_priv_bytes, Some(&path)) {
+					log_trace!(
+						self.logger,
+						"Received duplicative fail for HTLC with payment_hash {}",
+						&payment_hash
+					);
+					return false;
+				}
+				if payment.get().is_fulfilled() {
+					log_trace!(
+						self.logger,
+						"Received failure of HTLC with payment_hash {} after payment completion",
+						&payment_hash
+					);
+					return false;
+				}
+				let mut is_retryable_now = payment.get().is_auto_retryable_now();
+				if let Some(scid) = short_channel_id {
+					// TODO: If we decided to blame ourselves (or one of our channels) in
+					// process_onion_failure we should close that channel as it implies our
+					// next-hop is needlessly blaming us!
+					payment.get_mut().insert_previously_failed_scid(scid);
+				}
+				if failed_within_blinded_path {
+					debug_assert!(short_channel_id.is_none());
+					if let Some(bt) = &path.blinded_tail {
+						payment.get_mut().insert_previously_failed_blinded_path(&bt);
+					} else {
+						debug_assert!(false);
+					}
+				}
+
+				if !is_retryable_now || payment_failed_permanently {
+					let reason = if payment_failed_permanently {
+						PaymentFailureReason::RecipientRejected
+					} else {
+						PaymentFailureReason::RetriesExhausted
+					};
+					payment.get_mut().mark_abandoned(reason);
+					is_retryable_now = false;
+				}
+				if payment.get().remaining_parts() == 0 {
+					if let PendingOutboundPayment::Abandoned { .. } = payment.get() {
+						payment.remove();
+						return true;
+					}
+				}
+				is_retryable_now
+			} else {
+				log_trace!(
+					self.logger,
+					"Received fail for HTLC with payment_hash {} not found.",
+					&payment_hash
+				);
+				return true;
+			};
+		core::mem::drop(outbounds);
+		log_trace!(
+			self.logger,
+			"Failing Trampoline forward HTLC with payment_hash {}",
+			&payment_hash
+		);
+
+		// If we miss abandoning the payment above, we *must* generate an event here or else the
+		// payment will sit in our outbounds forever.
+		if attempts_remaining && !already_awaiting_retry {
+			pending_retry_ev = true;
+		};
+
+		!pending_retry_ev
+	}
+
 	pub(super) fn fail_htlc(
 		&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason,
 		path: &Path, session_priv: &SecretKey, payment_id: &PaymentId,

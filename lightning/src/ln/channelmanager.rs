@@ -5549,8 +5549,7 @@ where
 									.clone(),
 								incoming_trampoline_shared_secret: trampoline_forward_info
 									.incoming_trampoline_shared_secret,
-								session_priv: session_priv.clone(),
-								outbound_payment: Some((payment_id, path.clone())),
+								outbound_payment: Some((payment_id, path.clone(), session_priv)),
 							},
 						};
 						let send_res = chan.send_htlc_and_commit(

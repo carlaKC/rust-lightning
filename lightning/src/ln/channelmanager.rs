@@ -8127,14 +8127,15 @@ impl<
 			forwarding_fee_proportional_millionths as u64 * next_hop_info.amount_msat / 1_000_000;
 		let our_forwarding_fee_msat = proportional_fee + forwarding_fee_base_msat as u64;
 
-		let max_total_routing_fee_msat =
-			match incoming_amt_msat.checked_sub(our_forwarding_fee_msat + outgoing_amt_msat) {
-				Some(amount) => amount,
-				None => {
-					// LocalHTLCFailureReason::TrampolineFeeOrExpiryInsufficient,
-					return Err(committed_to_claimable);
-				},
-			};
+		let max_total_routing_fee_msat = match incoming_amt_msat
+			.checked_sub(our_forwarding_fee_msat + next_hop_info.amount_msat)
+		{
+			Some(amount) => amount,
+			None => {
+				// LocalHTLCFailureReason::TrampolineFeeOrExpiryInsufficient,
+				return Err(committed_to_claimable);
+			},
+		};
 
 		let max_total_cltv_expiry_delta =
 			match incoming_cltv_expiry.checked_sub(next_hop_info.cltv_expiry_height + cltv_delta) {
@@ -9297,42 +9298,45 @@ impl<
 				incoming_trampoline_shared_secret,
 				..
 			} => {
-				// TODO: what do we want to do with this given we do not wish to propagate it directly?
-				let _decoded_onion_failure =
-					onion_error.decode_onion_failure(&self.secp_ctx, &self.logger, &source);
-				let incoming_trampoline_shared_secret = Some(*incoming_trampoline_shared_secret);
+				let should_fail_backwards = self.pending_outbound_payments.trampoline_htlc_failed(
+					source,
+					payment_hash,
+					onion_error,
+					&self.secp_ctx,
+					&WithContext::from(&self.logger, None, None, Some(*payment_hash)),
+				);
 
-				// TODO: when we receive a failure from a single outgoing trampoline HTLC, we don't
-				// necessarily want to fail all of our incoming HTLCs back yet. We may have other
-				// outgoing HTLCs that need to resolve first. This will be tracked in our
-				// pending_outbound_payments in a followup.
-				for current_hop_data in previous_hop_data {
-					let incoming_packet_shared_secret =
-						&current_hop_data.incoming_packet_shared_secret;
-					let channel_id = &current_hop_data.channel_id;
-					let short_channel_id = &current_hop_data.prev_outbound_scid_alias;
-					let htlc_id = &current_hop_data.htlc_id;
-					let blinded_failure = &current_hop_data.blinded_failure;
-					log_trace!(
+				if should_fail_backwards {
+					let incoming_trampoline_shared_secret =
+						Some(*incoming_trampoline_shared_secret);
+					for current_hop_data in previous_hop_data {
+						let incoming_packet_shared_secret =
+							&current_hop_data.incoming_packet_shared_secret;
+						let channel_id = &current_hop_data.channel_id;
+						let short_channel_id = &current_hop_data.prev_outbound_scid_alias;
+						let htlc_id = &current_hop_data.htlc_id;
+						let blinded_failure = &current_hop_data.blinded_failure;
+						log_trace!(
 						WithContext::from(&self.logger, None, Some(*channel_id), Some(*payment_hash)),
 						"Failing {}HTLC with payment_hash {} backwards from us following Trampoline forwarding failure: {:?}",
 						if blinded_failure.is_some() { "blinded " } else { "" }, &payment_hash, onion_error
 					);
-					let onion_error = HTLCFailReason::reason(
-						LocalHTLCFailureReason::TemporaryTrampolineFailure,
-						Vec::new(),
-					);
-					push_forward_htlcs_failure(
-						*short_channel_id,
-						get_htlc_forward_failure(
-							blinded_failure,
-							&onion_error,
-							incoming_packet_shared_secret,
-							&incoming_trampoline_shared_secret,
-							&None,
-							*htlc_id,
-						),
-					);
+						let onion_error = HTLCFailReason::reason(
+							LocalHTLCFailureReason::TemporaryTrampolineFailure,
+							Vec::new(),
+						);
+						push_forward_htlcs_failure(
+							*short_channel_id,
+							get_htlc_forward_failure(
+								blinded_failure,
+								&onion_error,
+								incoming_packet_shared_secret,
+								&incoming_trampoline_shared_secret,
+								&None,
+								*htlc_id,
+							),
+						);
+					}
 				}
 
 				// We only want to emit a single event for trampoline failures, so we do it once

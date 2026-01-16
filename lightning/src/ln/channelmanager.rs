@@ -4978,9 +4978,10 @@ impl<
 				debug_assert!(false, "Dummy hop reached HTLC handling.");
 				return Err(LocalHTLCFailureReason::InvalidOnionPayload);
 			},
-			HopConnector::Trampoline(_) => {
-				return Err(LocalHTLCFailureReason::InvalidTrampolineForward);
-			},
+			// We can't make forwarding checks on trampoline forwards where we don't know the
+			// outgoing channel on receipt of the incoming htlc.
+			// TODO: what do we do about interception for trampoline?
+			HopConnector::Trampoline(_) => return Ok(false),
 		};
 		// TODO: We do the fake SCID namespace check a bunch of times here (and indirectly via
 		// `forward_needs_intercept_*`, including as called in

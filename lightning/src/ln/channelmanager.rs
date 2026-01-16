@@ -11926,14 +11926,14 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 		match peer_state.channel_by_id.entry(msg.channel_id) {
 			hash_map::Entry::Occupied(mut chan_entry) => {
 				if (msg.failure_code & 0x8000) == 0 {
-					let chan_err = ChannelError::close("Got update_fail_malformed_htlc with BADONION not set".to_owned());
-					try_channel_entry!(self, peer_state, Err(chan_err), chan_entry);
+				let chan_err = ChannelError::close("Got update_fail_malformed_htlc with BADONION not set".to_owned());
+                                       try_channel_entry!(self, peer_state, Err(chan_err), chan_entry);
 				}
 				if let Some(chan) = chan_entry.get_mut().as_funded_mut() {
-					try_channel_entry!(self, peer_state, chan.update_fail_malformed_htlc(&msg, HTLCFailReason::reason(msg.failure_code.into(), msg.sha256_of_onion.to_vec())), chan_entry);
+				        try_channel_entry!(self, peer_state, chan.update_fail_malformed_htlc(&msg, HTLCFailReason::reason(msg.failure_code.into(), msg.sha256_of_onion.to_vec())), chan_entry);
 				} else {
-					return try_channel_entry!(self, peer_state, Err(ChannelError::close(
-						"Got an update_fail_malformed_htlc message for an unfunded channel!".into())), chan_entry);
+				return try_channel_entry!(self, peer_state, Err(ChannelError::close(
+				        "Got an update_fail_malformed_htlc message for an unfunded channel!".into())), chan_entry);
 				}
 				Ok(())
 			},

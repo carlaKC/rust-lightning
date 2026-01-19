@@ -461,24 +461,24 @@ pub(super) fn build_onion_payloads<'a>(
 		path.hops.len() + path.blinded_tail.as_ref().map_or(0, |t| t.hops.len()),
 	);
 
-	// When Trampoline hops are present, they are presumed to follow the non-Trampoline hops, which
-	// means that the blinded path needs not be appended to the regular hops, and is only included
-	// among the Trampoline onion payloads.
-	let blinded_tail_with_hop_iter = path.blinded_tail.as_ref().map(|bt| {
-		if let Some((trampoline_packet, blinding_point)) = trampoline_packet {
-			return BlindedTailDetails::TrampolineEntry {
-				trampoline_packet,
-				final_value_msat: bt.final_value_msat,
-				blinding_point,
-			};
-		}
-		BlindedTailDetails::DirectEntry {
+	let blinded_tail_with_hop_iter = match trampoline_packet {
+		// If we need to include a trampoline payload in the last hop of our outer onion, we don't
+		// need to append blinded hops (if present) to the end of our regular payload as they'll
+		// be included inside of the inner trampoline packet.
+		Some((trampoline_packet, blinding_point)) => Some(BlindedTailDetails::TrampolineEntry {
+			trampoline_packet,
+			final_value_msat: path.final_value_msat(),
+			blinding_point,
+		}),
+		// If trampoline hops aren't present, append blinded hops (if any) to the end of the regular
+		// hops.
+		None => path.blinded_tail.as_ref().map(|bt| BlindedTailDetails::DirectEntry {
 			hops: bt.hops.iter(),
 			blinding_point: bt.blinding_point,
 			final_value_msat: bt.final_value_msat,
 			excess_final_cltv_expiry_delta: bt.excess_final_cltv_expiry_delta,
-		}
-	});
+		}),
+	};
 
 	let (value_msat, cltv) = build_onion_payloads_callback(
 		path.hops.iter(),

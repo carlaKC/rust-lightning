@@ -2045,7 +2045,7 @@ fn test_trampoline_onion_payload_assembly_values() {
 		outer_starting_htlc_offset,
 		&None,
 		None,
-		Some(trampoline_packet),
+		Some((trampoline_packet, None)),
 	)
 	.unwrap();
 	assert_eq!(outer_payloads.len(), 2);

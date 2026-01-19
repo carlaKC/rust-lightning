@@ -17,12 +17,13 @@ use crate::events::HTLCHandlingFailureReason;
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs::{self, DecodeError};
+use crate::ln::outbound_payment::NextTrampolineHopInfo;
 use crate::offers::invoice_request::InvoiceRequest;
 use crate::routing::gossip::NetworkUpdate;
 use crate::routing::router::{BlindedTail, Path, RouteHop, RouteParameters, TrampolineHop};
 use crate::sign::{NodeSigner, Recipient};
 use crate::types::features::{ChannelFeatures, NodeFeatures};
-use crate::types::payment::{PaymentHash, PaymentPreimage};
+use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 use crate::util::errors::APIError;
 use crate::util::logger::Logger;
 use crate::util::ser::{
@@ -2576,6 +2577,34 @@ pub(super) fn compute_trampoline_session_priv(outer_onion_session_priv: &SecretK
 	// onion session priv.
 	let session_priv_hash = Sha256::hash(&outer_onion_session_priv.secret_bytes()).to_byte_array();
 	SecretKey::from_slice(&session_priv_hash[..]).expect("You broke SHA-256!")
+}
+
+pub(crate) fn create_trampoline_forward_onion<T: secp256k1::Signing>(
+	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey, total_msat: u64,
+	payment_secret: PaymentSecret, cur_block_height: u32, payment_hash: &PaymentHash,
+	keysend_preimage: &Option<PaymentPreimage>, trampoline_forward_info: &NextTrampolineHopInfo,
+	prng_seed: [u8; 32],
+) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
+	let recipient_onion = RecipientOnionFields::secret_only(payment_secret);
+	let (onion_payloads, htlc_msat, htlc_cltv) = build_onion_payloads(
+		&path,
+		total_msat,
+		&recipient_onion,
+		cur_block_height,
+		keysend_preimage,
+		None,
+		Some((
+			trampoline_forward_info.onion_packet.clone(),
+			trampoline_forward_info.blinding_point,
+		)),
+	)?;
+
+	let onion_keys = construct_onion_keys(&secp_ctx, &path, session_priv);
+	let onion_packet = construct_onion_packet(onion_payloads, onion_keys, prng_seed, payment_hash)
+		.map_err(|_| APIError::InvalidRoute {
+			err: "Route size too large considering onion data".to_owned(),
+		})?;
+	Ok((onion_packet, htlc_msat, htlc_cltv))
 }
 
 /// Build a payment onion, returning the first hop msat and cltv values as well.

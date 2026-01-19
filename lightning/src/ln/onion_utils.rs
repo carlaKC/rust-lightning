@@ -206,6 +206,7 @@ trait OnionPayload<'a, 'b> {
 	fn new_trampoline_entry(
 		total_msat: u64, amt_to_forward: u64, outgoing_cltv_value: u32,
 		recipient_onion: &'a RecipientOnionFields, packet: msgs::TrampolineOnionPacket,
+		blinding_point: Option<PublicKey>,
 	) -> Result<Self::ReceiveType, APIError>;
 }
 impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
@@ -255,15 +256,28 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 	fn new_trampoline_entry(
 		total_msat: u64, amt_to_forward: u64, outgoing_cltv_value: u32,
 		recipient_onion: &'a RecipientOnionFields, packet: msgs::TrampolineOnionPacket,
+		blinding_point: Option<PublicKey>,
 	) -> Result<Self, APIError> {
-		Ok(Self::TrampolineEntrypoint {
-			amt_to_forward,
-			outgoing_cltv_value,
-			multipath_trampoline_data: recipient_onion
-				.payment_secret
-				.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
-			trampoline_packet: packet,
-		})
+		if let Some(blinding_point) = blinding_point {
+			Ok(Self::BlindedTrampolineEntrypoint {
+				amt_to_forward,
+				outgoing_cltv_value,
+				multipath_trampoline_data: recipient_onion
+					.payment_secret
+					.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
+				trampoline_packet: packet,
+				current_path_key: blinding_point,
+			})
+		} else {
+			Ok(Self::TrampolineEntrypoint {
+				amt_to_forward,
+				outgoing_cltv_value,
+				multipath_trampoline_data: recipient_onion
+					.payment_secret
+					.map(|payment_secret| msgs::FinalOnionHopData { payment_secret, total_msat }),
+				trampoline_packet: packet,
+			})
+		}
 	}
 }
 impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundTrampolinePayload<'a> {
@@ -307,6 +321,7 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundTrampolinePayload<'a> {
 	fn new_trampoline_entry(
 		_total_msat: u64, _amt_to_forward: u64, _outgoing_cltv_value: u32,
 		_recipient_onion: &'a RecipientOnionFields, _packet: msgs::TrampolineOnionPacket,
+		_blinding_point: Option<PublicKey>,
 	) -> Result<Self::ReceiveType, APIError> {
 		Err(APIError::InvalidRoute {
 			err: "Trampoline onions cannot contain Trampoline entrypoints!".to_string(),
@@ -440,7 +455,7 @@ pub(super) fn build_onion_payloads<'a>(
 	path: &'a Path, total_msat: u64, recipient_onion: &'a RecipientOnionFields,
 	starting_htlc_offset: u32, keysend_preimage: &Option<PaymentPreimage>,
 	invoice_request: Option<&'a InvoiceRequest>,
-	trampoline_packet: Option<msgs::TrampolineOnionPacket>,
+	trampoline_packet: Option<(msgs::TrampolineOnionPacket, Option<PublicKey>)>,
 ) -> Result<(Vec<msgs::OutboundOnionPayload<'a>>, u64, u32), APIError> {
 	let mut res: Vec<msgs::OutboundOnionPayload> = Vec::with_capacity(
 		path.hops.len() + path.blinded_tail.as_ref().map_or(0, |t| t.hops.len()),
@@ -450,10 +465,11 @@ pub(super) fn build_onion_payloads<'a>(
 	// means that the blinded path needs not be appended to the regular hops, and is only included
 	// among the Trampoline onion payloads.
 	let blinded_tail_with_hop_iter = path.blinded_tail.as_ref().map(|bt| {
-		if let Some(trampoline_packet) = trampoline_packet {
+		if let Some((trampoline_packet, blinding_point)) = trampoline_packet {
 			return BlindedTailDetails::TrampolineEntry {
 				trampoline_packet,
 				final_value_msat: bt.final_value_msat,
+				blinding_point,
 			};
 		}
 		BlindedTailDetails::DirectEntry {
@@ -490,6 +506,9 @@ enum BlindedTailDetails<'a, I: Iterator<Item = &'a BlindedHop>> {
 	TrampolineEntry {
 		trampoline_packet: msgs::TrampolineOnionPacket,
 		final_value_msat: u64,
+		// If forwarding a trampoline payment inside of a blinded path, this blinding_point will
+		// be set for the trampoline to decrypt its inner onion.
+		blinding_point: Option<PublicKey>,
 	},
 }
 
@@ -564,6 +583,7 @@ where
 				Some(BlindedTailDetails::TrampolineEntry {
 					trampoline_packet,
 					final_value_msat,
+					blinding_point,
 				}) => {
 					cur_value_msat += final_value_msat;
 					callback(
@@ -574,6 +594,7 @@ where
 							cur_cltv,
 							&recipient_onion,
 							trampoline_packet,
+							blinding_point,
 						)?,
 					);
 				},
@@ -2599,7 +2620,7 @@ pub(crate) fn create_payment_onion_internal<T: secp256k1::Signing>(
 				err: "Route size too large considering onion data".to_owned(),
 			})?;
 
-			trampoline_packet_option = Some(trampoline_packet);
+			trampoline_packet_option = Some((trampoline_packet, None));
 		}
 	}
 

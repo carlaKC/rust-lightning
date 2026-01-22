@@ -1152,6 +1152,11 @@ impl ClaimablePayment {
 			.map(|htlc| (htlc.prev_hop.channel_id, htlc.prev_hop.user_channel_id))
 			.collect()
 	}
+
+	/// Returns the total counterparty skimmed fee across all HTLCs.
+	fn total_counterparty_skimmed_msat(&self) -> u64 {
+		self.htlcs.iter().map(|htlc| htlc.counterparty_skimmed_fee_msat.unwrap_or(0)).sum()
+	}
 }
 
 /// Increments MPP timeout tick for all HTLCs and returns a boolean indicating whether the HTLC
@@ -7920,14 +7925,14 @@ where
 
 	// Checks whether an incoming htlc can be added to our [`claimable_payments`], and handles
 	// MPP accumulation. Returns a boolean that indicates whether we're modified our set of
-	// claimable_payments, and a result that indicates whether the all the parts of the htlc
-	// have successfully arrived.
-	fn check_claimable_incoming_htlc(
-		&self, claimable_payment: &mut ClaimablePayment, purpose: events::PaymentPurpose,
-		receiver_node_id: PublicKey, claimable_htlc: ClaimableHTLC,
-		mut onion_fields: RecipientOnionFields, payment_hash: PaymentHash,
-		new_events: &mut VecDeque<(Event, Option<EventCompletionAction>)>,
-	) -> (bool, Result<bool, ()>) {
+	// claimable_payments, and a result representing the payment claim status. The result will
+	// be `Ok(Some(...))` if the payment is complete and ready to forward, `Ok(None)` if
+	/// we're still waiting for additional MPP parts, or `Err(...)` if the HTLC should be failed.
+	fn check_claimable_incoming_htlc<'a>(
+		&self, claimable_payment: &'a mut ClaimablePayment, purpose: events::PaymentPurpose,
+		claimable_htlc: ClaimableHTLC, mut onion_fields: RecipientOnionFields,
+		payment_hash: PaymentHash,
+	) -> (bool, Result<Option<(&'a ClaimablePayment, u64, u32)>, ()>) {
 		let mut committed_to_claimable = false;
 		let is_keysend = purpose.is_keysend();
 
@@ -7979,29 +7984,12 @@ where
 				.htlcs
 				.iter_mut()
 				.for_each(|htlc| htlc.total_value_received = Some(amount_msat));
-			let counterparty_skimmed_fee_msat = claimable_payment
-				.htlcs
-				.iter()
-				.map(|htlc| htlc.counterparty_skimmed_fee_msat.unwrap_or(0))
-				.sum();
-			debug_assert!(total_value.saturating_sub(amount_msat) <= counterparty_skimmed_fee_msat);
+			debug_assert!(
+				total_value.saturating_sub(amount_msat)
+					<= claimable_payment.total_counterparty_skimmed_msat()
+			);
 			claimable_payment.htlcs.sort();
-			let payment_id = claimable_payment.inbound_payment_id(&self.inbound_payment_id_secret);
-			new_events.push_back((
-				events::Event::PaymentClaimable {
-					receiver_node_id: Some(receiver_node_id),
-					payment_hash,
-					purpose,
-					amount_msat,
-					counterparty_skimmed_fee_msat,
-					receiving_channel_ids: claimable_payment.receiving_channel_ids(),
-					claim_deadline: Some(earliest_expiry - HTLC_FAIL_BACK_BUFFER),
-					onion_fields: claimable_payment.onion_fields.clone(),
-					payment_id: Some(payment_id),
-				},
-				None,
-			));
-			(committed_to_claimable, Ok(true))
+			(committed_to_claimable, Ok(Some((claimable_payment, amount_msat, earliest_expiry))))
 		} else {
 			// Nothing to do - we haven't reached the total
 			// payment value yet, wait until we receive more
@@ -8011,7 +7999,7 @@ where
 			{
 				committed_to_claimable = true;
 			}
-			(committed_to_claimable, Ok(false))
+			(committed_to_claimable, Ok(None))
 		}
 	}
 
@@ -8173,8 +8161,8 @@ where
 					}
 
 					macro_rules! handle_incoming_htlc {
-						($purpose: expr, $receiver_node_id: expr, $claimable_htlc: expr, $onion_fields: expr,
-						$payment_hash: expr, $new_events: expr) => {{
+						($purpose: expr, $claimable_htlc: expr, $onion_fields: expr,
+						$payment_hash: expr) => {{
 							let mut claimable_payments = self.claimable_payments.lock().unwrap();
 							if claimable_payments
 								.pending_claiming_payments
@@ -8197,16 +8185,42 @@ where
 
 							let (htlc_committed, res) = self.check_claimable_incoming_htlc(
 								claimable_payment,
-								$purpose,
-								$receiver_node_id,
+								$purpose.clone(),
 								$claimable_htlc,
 								$onion_fields,
 								$payment_hash,
-								$new_events,
 							);
 							committed_to_claimable |= htlc_committed;
 							match res {
-								Ok(mpp_complete) => mpp_complete,
+								Ok(Some((claimable_payment, amount_msat, earliest_expiry))) => {
+									let payment_id = claimable_payment
+										.inbound_payment_id(&self.inbound_payment_id_secret);
+
+									let counterparty_skimmed_fee_msat =
+										claimable_payment.total_counterparty_skimmed_msat();
+									let receiving_channel_ids =
+										claimable_payment.receiving_channel_ids();
+									let onion_fields = claimable_payment.onion_fields.clone();
+									drop(claimable_payments);
+
+									new_events.push_back((
+										events::Event::PaymentClaimable {
+											receiver_node_id: Some(receiver_node_id),
+											payment_hash,
+											purpose: $purpose,
+											amount_msat,
+											counterparty_skimmed_fee_msat,
+											receiving_channel_ids,
+											claim_deadline: Some(
+												earliest_expiry - HTLC_FAIL_BACK_BUFFER,
+											),
+											onion_fields,
+											payment_id: Some(payment_id),
+										},
+										None,
+									));
+								},
+								Ok(None) => {},
 								Err(_) => {
 									debug_assert!(!committed_to_claimable);
 									fail_htlc!(claimable_htlc, payment_hash);
@@ -8270,11 +8284,9 @@ where
 							};
 							handle_incoming_htlc!(
 								purpose,
-								receiver_node_id,
 								claimable_htlc,
 								onion_fields,
-								payment_hash,
-								new_events
+								payment_hash
 							);
 						},
 						OnionPayload::Spontaneous(keysend_preimage) => {
@@ -8341,11 +8353,9 @@ where
 							};
 							handle_incoming_htlc!(
 								purpose,
-								receiver_node_id,
 								claimable_htlc,
 								onion_fields,
-								payment_hash,
-								new_events
+								payment_hash
 							);
 						},
 						OnionPayload::Trampoline { .. } => {

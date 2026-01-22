@@ -727,8 +727,17 @@ impl SentHTLCId {
 				prev_outbound_scid_alias: hop_data.prev_outbound_scid_alias,
 				htlc_id: hop_data.htlc_id,
 			},
-			HTLCSource::TrampolineForward { session_priv, .. } => {
-				Self::TrampolineForward { session_priv: session_priv.secret_bytes() }
+			HTLCSource::TrampolineForward {
+				incoming_trampoline_shared_secret,
+				ref outbound_payment,
+				..
+			} => Self::TrampolineForward {
+				// TODO: our payment details should never be None by the time we reach this point.
+				// The incoming_trampoline_shared_secret isn't guaranteed to be unique (we don't
+				// pick it) so we should have something better here.
+				session_priv: outbound_payment
+					.clone()
+					.map_or(*incoming_trampoline_shared_secret, |o| o.2.secret_bytes()),
 			},
 			HTLCSource::OutboundRoute { session_priv, .. } => {
 				Self::OutboundRoute { session_priv: session_priv.secret_bytes() }
@@ -768,10 +777,9 @@ mod fuzzy_channelmanager {
 			/// need to store the vector of corresponding `HTLCPreviousHopData` values.
 			previous_hop_data: Vec<HTLCPreviousHopData>,
 			incoming_trampoline_shared_secret: [u8; 32],
-			path: Path,
-			/// In order to decode inter-Trampoline errors, we need to store the session_priv key
-			/// given we're effectively creating new outbound routes.
-			session_priv: SecretKey,
+			/// Track outbound payment details once the payment has been dispatched, will be `None`
+			/// when waiting for incoming MPP to accumulate.
+			outbound_payment: Option<(PaymentId, Path, SecretKey)>,
 		},
 		OutboundRoute {
 			path: Path,
@@ -848,14 +856,16 @@ impl core::hash::Hash for HTLCSource {
 			HTLCSource::TrampolineForward {
 				previous_hop_data,
 				incoming_trampoline_shared_secret,
-				path,
-				session_priv,
+				outbound_payment,
 			} => {
 				2u8.hash(hasher);
 				previous_hop_data.hash(hasher);
 				incoming_trampoline_shared_secret.hash(hasher);
-				path.hash(hasher);
-				session_priv[..].hash(hasher);
+				if let Some((payment_id, path, session_priv)) = outbound_payment {
+					payment_id.hash(hasher);
+					path.hash(hasher);
+					session_priv[..].hash(hasher);
+				}
 			},
 		}
 	}
@@ -16677,14 +16687,21 @@ impl Readable for HTLCSource {
 				_init_and_read_len_prefixed_tlv_fields!(reader, {
 					(1, previous_hop_data, required_vec),
 					(3, incoming_trampoline_shared_secret, required),
-					(5, path, required),
-					(7, session_priv, required),
+					(5, outbound_payment_id, option),
+					(7, outbound_path, option),
+					(9, session_priv, option),
 				});
+
+				let outbound_payment = match (outbound_payment_id, outbound_path, session_priv) {
+					(Some(payment_id), Some(path), Some(session_priv)) => Some((payment_id, path, session_priv)),
+					(None, None, None) => None,
+					_ => return Err(DecodeError::InvalidValue)
+				};
+
 				Ok(HTLCSource::TrampolineForward {
 					previous_hop_data: _init_tlv_based_struct_field!(previous_hop_data, required_vec),
 					incoming_trampoline_shared_secret: _init_tlv_based_struct_field!(incoming_trampoline_shared_secret, required),
-					path: _init_tlv_based_struct_field!(path, required),
-					session_priv: _init_tlv_based_struct_field!(session_priv, required),
+					outbound_payment,
 				})
 			},
 			_ => Err(DecodeError::UnknownRequiredFeature),
@@ -16722,15 +16739,21 @@ impl Writeable for HTLCSource {
 			HTLCSource::TrampolineForward {
 				ref previous_hop_data,
 				incoming_trampoline_shared_secret,
-				ref session_priv,
-				ref path,
+				ref outbound_payment,
 			} => {
+				let (outbound_payment_id, outbound_path, session_priv) = match outbound_payment {
+					Some((payment_id, path, session_priv)) => {
+						(Some(payment_id), Some(path), Some(session_priv))
+					},
+					None => (None, None, None),
+				};
 				2u8.write(writer)?;
 				write_tlv_fields!(writer, {
 					(1, *previous_hop_data, required_vec),
 					(3, incoming_trampoline_shared_secret, required),
-					(5, *path, required),
-					(7, session_priv, required),
+					(5, outbound_payment_id, option),
+					(7, outbound_path, option),
+					(9, session_priv, option),
 				});
 			},
 		}

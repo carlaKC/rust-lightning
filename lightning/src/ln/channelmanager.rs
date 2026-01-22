@@ -7923,26 +7923,14 @@ where
 	// claimable_payments, and a result that indicates whether the all the parts of the htlc
 	// have successfully arrived.
 	fn check_claimable_incoming_htlc(
-		&self, purpose: events::PaymentPurpose, receiver_node_id: PublicKey,
-		claimable_htlc: ClaimableHTLC, mut onion_fields: RecipientOnionFields,
-		payment_hash: PaymentHash,
+		&self, claimable_payment: &mut ClaimablePayment, purpose: events::PaymentPurpose,
+		receiver_node_id: PublicKey, claimable_htlc: ClaimableHTLC,
+		mut onion_fields: RecipientOnionFields, payment_hash: PaymentHash,
 		new_events: &mut VecDeque<(Event, Option<EventCompletionAction>)>,
 	) -> (bool, Result<bool, ()>) {
 		let mut committed_to_claimable = false;
 		let is_keysend = purpose.is_keysend();
-		let mut claimable_payments = self.claimable_payments.lock().unwrap();
-		if claimable_payments.pending_claiming_payments.contains_key(&payment_hash) {
-			return (committed_to_claimable, Err(()));
-		}
 
-		let ref mut claimable_payment = claimable_payments
-			.claimable_payments
-			.entry(payment_hash)
-			// Note that if we insert here we MUST NOT fail_htlc!()
-			.or_insert_with(|| {
-				committed_to_claimable = true;
-				ClaimablePayment { purpose: purpose.clone(), htlcs: Vec::new(), onion_fields: None }
-			});
 		if purpose != claimable_payment.purpose {
 			let log_keysend = |keysend| if keysend { "keysend" } else { "non-keysend" };
 			log_trace!(self.logger, "Failing new {} HTLC with payment_hash {} as we already had an existing {} HTLC with the same payment hash", log_keysend(is_keysend), &payment_hash, log_keysend(!is_keysend));
@@ -8187,7 +8175,28 @@ where
 					macro_rules! handle_incoming_htlc {
 						($purpose: expr, $receiver_node_id: expr, $claimable_htlc: expr, $onion_fields: expr,
 						$payment_hash: expr, $new_events: expr) => {{
-							let (committed_to_claimable, res) = self.check_claimable_incoming_htlc(
+							let mut claimable_payments = self.claimable_payments.lock().unwrap();
+							if claimable_payments
+								.pending_claiming_payments
+								.contains_key(&payment_hash)
+							{
+								fail_htlc!(claimable_htlc, payment_hash);
+							}
+							let claimable_payment_entry =
+								claimable_payments.claimable_payments.entry(payment_hash);
+
+							let mut committed_to_claimable = false;
+							let claimable_payment = claimable_payment_entry.or_insert_with(|| {
+								committed_to_claimable = true;
+								ClaimablePayment {
+									purpose: $purpose.clone(),
+									htlcs: Vec::new(),
+									onion_fields: None,
+								}
+							});
+
+							let (htlc_committed, res) = self.check_claimable_incoming_htlc(
+								claimable_payment,
 								$purpose,
 								$receiver_node_id,
 								$claimable_htlc,
@@ -8195,6 +8204,7 @@ where
 								$payment_hash,
 								$new_events,
 							);
+							committed_to_claimable |= htlc_committed;
 							match res {
 								Ok(mpp_complete) => mpp_complete,
 								Err(_) => {

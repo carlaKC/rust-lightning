@@ -8096,6 +8096,33 @@ where
 								None,
 							)
 						},
+						PendingHTLCRouting::TrampolineForward {
+							incoming_shared_secret,
+							onion_packet: _,
+							node_id: _,
+							blinded: _,
+							incoming_cltv_expiry,
+							multipath_trampoline_data,
+						} => {
+							let onion_fields = RecipientOnionFields {
+								payment_secret: multipath_trampoline_data
+									.as_ref()
+									.map(|data| data.payment_secret),
+								payment_metadata: None,
+								custom_tlvs: Vec::new(),
+							};
+							(
+								incoming_cltv_expiry,
+								OnionPayload::Trampoline {},
+								multipath_trampoline_data,
+								None,
+								None,
+								onion_fields,
+								false,
+								None,
+								Some(incoming_shared_secret),
+							)
+						},
 						_ => {
 							panic!("short_channel_id == 0 should imply any pending_forward entries are of type Receive");
 						},
@@ -8163,25 +8190,51 @@ where
 					macro_rules! handle_incoming_htlc {
 						($purpose: expr, $claimable_htlc: expr, $onion_fields: expr,
 						$payment_hash: expr) => {{
-							let mut claimable_payments = self.claimable_payments.lock().unwrap();
-							if claimable_payments
-								.pending_claiming_payments
-								.contains_key(&payment_hash)
-							{
-								fail_htlc!(claimable_htlc, payment_hash);
-							}
-							let claimable_payment_entry =
-								claimable_payments.claimable_payments.entry(payment_hash);
-
 							let mut committed_to_claimable = false;
-							let claimable_payment = claimable_payment_entry.or_insert_with(|| {
-								committed_to_claimable = true;
-								ClaimablePayment {
-									purpose: $purpose.clone(),
-									htlcs: Vec::new(),
-									onion_fields: None,
-								}
-							});
+							let claimable_payment = match onion_payload {
+								OnionPayload::Trampoline{} => {
+									let mut pending_trampolines =
+										self.pending_trampoline_forwards.lock().unwrap();
+
+									if pending_trampolines.contains_key(&payment_hash) {
+										fail_htlc!(claimable_htlc, payment_hash);
+									}
+									&mut pending_trampolines
+										.entry(payment_hash)
+										.or_insert_with(|| {
+											committed_to_claimable = true;
+											AwaitingTrampolinePayment {
+												payment: ClaimablePayment {
+													purpose: $purpose.clone(),
+													htlcs: Vec::new(),
+													onion_fields: None,
+												},
+											}
+										})
+										.payment
+								},
+								_ => {
+									let mut claimable_payments =
+										self.claimable_payments.lock().unwrap();
+									if claimable_payments
+										.pending_claiming_payments
+										.contains_key(&payment_hash)
+									{
+										fail_htlc!(claimable_htlc, payment_hash);
+									}
+									claimable_payments
+										.claimable_payments
+										.entry(payment_hash)
+										.or_insert_with(|| {
+											committed_to_claimable = true;
+											ClaimablePayment {
+												purpose: $purpose.clone(),
+												htlcs: Vec::new(),
+												onion_fields: None,
+											}
+										})
+								},
+							};
 
 							let (htlc_committed, res) = self.check_claimable_incoming_htlc(
 								claimable_payment,
@@ -8201,7 +8254,7 @@ where
 									let receiving_channel_ids =
 										claimable_payment.receiving_channel_ids();
 									let onion_fields = claimable_payment.onion_fields.clone();
-									drop(claimable_payments);
+									drop(claimable_payment);
 
 									new_events.push_back((
 										events::Event::PaymentClaimable {

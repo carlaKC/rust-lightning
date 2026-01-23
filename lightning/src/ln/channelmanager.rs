@@ -89,9 +89,9 @@ use crate::ln::outbound_payment;
 #[cfg(any(test, feature = "_externalize_tests"))]
 use crate::ln::outbound_payment::PaymentSendFailure;
 use crate::ln::outbound_payment::{
-	Bolt11PaymentError, Bolt12PaymentError, OutboundPayments, PendingOutboundPayment,
-	ProbeSendFailure, RecipientCustomTlvs, RecipientOnionFields, Retry, RetryableInvoiceRequest,
-	RetryableSendFailure, SendAlongPathArgs, StaleExpiration,
+	Bolt11PaymentError, Bolt12PaymentError, OutboundPayments,
+	PendingOutboundPayment, ProbeSendFailure, RecipientCustomTlvs, RecipientOnionFields, Retry,
+	RetryableInvoiceRequest, RetryableSendFailure, SendAlongPathArgs, StaleExpiration,
 };
 use crate::ln::types::ChannelId;
 use crate::offers::async_receive_offer_cache::AsyncReceiveOfferCache;
@@ -8761,7 +8761,7 @@ impl<
 								fail_receive_htlc!(committed_to_claimable);
 							}
 						},
-					}
+						}
 				},
 				HTLCForwardInfo::FailHTLC { .. } | HTLCForwardInfo::FailMalformedHTLC { .. } => {
 					panic!("Got pending fail of our own HTLC");

@@ -8773,11 +8773,6 @@ where
 								previous_hop_data: prev_hops,
 								incoming_trampoline_shared_secret,
 								outbound_payment: None,
-								// TODO: this should be inside of outbound payment?
-								session_priv: SecretKey::from_slice(
-									&self.entropy_source.get_secure_random_bytes(),
-								)
-								.unwrap(),
 							},
 							*payment_hash,
 							HTLCHandlingFailureType::TrampolineForward { attempted_htlcs },

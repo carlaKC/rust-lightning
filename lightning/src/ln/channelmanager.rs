@@ -8097,10 +8097,10 @@ where
 							)
 						},
 						PendingHTLCRouting::TrampolineForward {
-							incoming_shared_secret,
-							onion_packet: _,
+							incoming_shared_secret: incoming_trampoline_shared_secret,
+							onion_packet,
 							node_id: _,
-							blinded: _,
+							blinded,
 							incoming_cltv_expiry,
 							multipath_trampoline_data,
 						} => {
@@ -8113,14 +8113,40 @@ where
 							};
 							(
 								incoming_cltv_expiry,
-								OnionPayload::Trampoline {},
+								OnionPayload::Trampoline {
+									incoming_trampoline_shared_secret, // TODO: maybe we don't need this?
+									next_hop_info: NextTrampolineHopInfo {
+										onion_packet,
+										blinding_point: blinded.and_then(|b| {
+											b.next_blinding_override.or_else(|| {
+												let encrypted_tlvs_ss = self
+													.node_signer
+													.ecdh(
+														Recipient::Node,
+														&b.inbound_blinding_point,
+														None,
+													)
+													.unwrap()
+													.secret_bytes();
+												onion_utils::next_hop_pubkey(
+													&self.secp_ctx,
+													b.inbound_blinding_point,
+													&encrypted_tlvs_ss,
+												)
+												.ok()
+											})
+										}),
+									},
+									next_blinding_point: None, // TODO: maybe we should store
+									                           // existin blinding for fail backs instead?
+								},
 								multipath_trampoline_data,
 								None,
 								None,
 								onion_fields,
 								false,
 								None,
-								Some(incoming_shared_secret),
+								Some(incoming_trampoline_shared_secret),
 							)
 						},
 						_ => {
@@ -8187,31 +8213,19 @@ where
 							.expect("Failed to get node_id for phantom node recipient");
 					}
 
+					macro_rules! get_payments_entry{
+
+					}
 					macro_rules! handle_incoming_htlc {
 						($purpose: expr, $claimable_htlc: expr, $onion_fields: expr,
 						$payment_hash: expr) => {{
 							let mut committed_to_claimable = false;
-							let claimable_payment = match onion_payload {
-								OnionPayload::Trampoline{} => {
-									let mut pending_trampolines =
-										self.pending_trampoline_forwards.lock().unwrap();
+							let payments_entry = match onion_payload {
+								OnionPayload::Trampoline { .. } => {
+									let mut trampoline_guard =
+										self.awaiting_trampoline_forwards.lock().unwrap();
 
-									if pending_trampolines.contains_key(&payment_hash) {
-										fail_htlc!(claimable_htlc, payment_hash);
-									}
-									&mut pending_trampolines
-										.entry(payment_hash)
-										.or_insert_with(|| {
-											committed_to_claimable = true;
-											AwaitingTrampolinePayment {
-												payment: ClaimablePayment {
-													purpose: $purpose.clone(),
-													htlcs: Vec::new(),
-													onion_fields: None,
-												},
-											}
-										})
-										.payment
+									trampoline_guard.entry(payment_hash)
 								},
 								_ => {
 									let mut claimable_payments =
@@ -8222,19 +8236,18 @@ where
 									{
 										fail_htlc!(claimable_htlc, payment_hash);
 									}
-									claimable_payments
-										.claimable_payments
-										.entry(payment_hash)
-										.or_insert_with(|| {
-											committed_to_claimable = true;
-											ClaimablePayment {
-												purpose: $purpose.clone(),
-												htlcs: Vec::new(),
-												onion_fields: None,
-											}
-										})
+									claimable_payments.claimable_payments.entry(payment_hash)
 								},
 							};
+
+							let claimable_payment = payments_entry.or_insert_with(|| {
+								committed_to_claimable = true;
+								ClaimablePayment {
+									purpose: $purpose.clone(),
+									htlcs: Vec::new(),
+									onion_fields: None,
+								}
+							});
 
 							let (htlc_committed, res) = self.check_claimable_incoming_htlc(
 								claimable_payment,

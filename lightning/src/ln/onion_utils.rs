@@ -17,12 +17,13 @@ use crate::events::HTLCHandlingFailureReason;
 use crate::ln::channel::TOTAL_BITCOIN_SUPPLY_SATOSHIS;
 use crate::ln::channelmanager::{HTLCSource, RecipientOnionFields};
 use crate::ln::msgs::{self, DecodeError};
+use crate::ln::outbound_payment::NextTrampolineHopInfo;
 use crate::offers::invoice_request::InvoiceRequest;
 use crate::routing::gossip::NetworkUpdate;
 use crate::routing::router::{BlindedTail, Path, RouteHop, RouteParameters, TrampolineHop};
 use crate::sign::{NodeSigner, Recipient};
 use crate::types::features::{ChannelFeatures, NodeFeatures};
-use crate::types::payment::{PaymentHash, PaymentPreimage};
+use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 use crate::util::errors::APIError;
 use crate::util::logger::Logger;
 use crate::util::ser::{
@@ -2576,6 +2577,49 @@ pub(super) fn compute_trampoline_session_priv(outer_onion_session_priv: &SecretK
 	// onion session priv.
 	let session_priv_hash = Sha256::hash(&outer_onion_session_priv.secret_bytes()).to_byte_array();
 	SecretKey::from_slice(&session_priv_hash[..]).expect("You broke SHA-256!")
+}
+
+/// Builds a payment onion for an inter-trampoline payment.
+pub(crate) fn create_trampoline_forward_onion<T: secp256k1::Signing>(
+	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey, total_msat: u64,
+	payment_secret: PaymentSecret, payment_hash: &PaymentHash,
+	keysend_preimage: &Option<PaymentPreimage>, trampoline_forward_info: &NextTrampolineHopInfo,
+	prng_seed: [u8; 32],
+) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
+	// Inter-trampoline payments should always be cleartext because we need to know the node id
+	// that we need to route to. LDK does not currently support the legacy "trampoline to blinded
+	// path" approach, where we get a blinded path to pay inside of our trampoline onion.
+	debug_assert!(path.blinded_tail.is_none(), "trampoline should not be blinded");
+
+	let mut res: Vec<msgs::OutboundOnionPayload> = Vec::with_capacity(path.hops.len());
+	let recipient_onion = RecipientOnionFields::secret_only(payment_secret);
+
+	let blinded_tail_with_hop_iter: BlindedTailDetails<'_, core::iter::Empty<&BlindedHop>> =
+		BlindedTailDetails::TrampolineEntry {
+			trampoline_packet: trampoline_forward_info.onion_packet.clone(),
+			final_value_msat: 0,
+			blinding_point: trampoline_forward_info.blinding_point,
+		};
+	let (value_msat, cltv) = build_onion_payloads_callback(
+		path.hops.iter(),
+		Some(blinded_tail_with_hop_iter),
+		total_msat,
+		&recipient_onion,
+		trampoline_forward_info.cltv_expiry_height,
+		keysend_preimage,
+		None,
+		|action, payload| match action {
+			PayloadCallbackAction::PushBack => res.push(payload),
+			PayloadCallbackAction::PushFront => res.insert(0, payload),
+		},
+	)?;
+
+	let onion_keys = construct_onion_keys(&secp_ctx, &path, session_priv);
+	let onion_packet =
+		construct_onion_packet(res, onion_keys, prng_seed, payment_hash).map_err(|_| {
+			APIError::InvalidRoute { err: "Route size too large considering onion data".to_owned() }
+		})?;
+	Ok((onion_packet, value_msat, cltv))
 }
 
 /// Build a payment onion, returning the first hop msat and cltv values as well.

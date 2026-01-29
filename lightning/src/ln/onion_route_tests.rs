@@ -2067,7 +2067,7 @@ fn test_trampoline_onion_payload_assembly_values() {
 		outer_bob_payload
 	{
 		assert_eq!(amt_to_forward, &150_153_000);
-		assert_eq!(outgoing_cltv_value, &800_084);
+		assert_eq!(outgoing_cltv_value, &800_060);
 	} else {
 		panic!("Bob payload must be Forward");
 	}

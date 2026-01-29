@@ -538,7 +538,7 @@ where
 		// exactly as it should be (and the next hop isn't trying to probe to find out if we're
 		// the intended recipient).
 		let value_msat = if cur_value_msat == 0 { hop.fee_msat() } else { cur_value_msat };
-		let cltv = if cur_cltv == starting_htlc_offset {
+		let cltv = if idx == 0 {
 			hop.cltv_expiry_delta().saturating_add(starting_htlc_offset)
 		} else {
 			cur_cltv

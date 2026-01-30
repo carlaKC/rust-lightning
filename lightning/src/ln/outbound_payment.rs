@@ -169,8 +169,13 @@ pub(crate) struct NextTrampolineHopInfo {
 	pub(crate) onion_packet: TrampolineOnionPacket,
 	/// If blinded, the current_path_key to set at the next Trampoline hop.
 	pub(crate) blinding_point: Option<PublicKey>,
-	/// The absolute expiry that the next trampoline node is expecting on their incoming HTLC.
+	/// The amount that the next trampoline is expecting to receive.
+	pub(crate) amount_msat: u64,
+	/// The cltv expiry height that the next trampoline is expecting.
 	pub(crate) cltv_expiry_height: u32,
+	/// The forwarding fee charged for this trampoline payment, persisted here so that we don't
+	/// need to look up the value of all our incoming/outgoing payments to calculate fee.
+	pub(crate) forwading_fee_msat: u64,
 }
 
 impl_writeable_tlv_based!(NextTrampolineHopInfo, {
@@ -178,6 +183,7 @@ impl_writeable_tlv_based!(NextTrampolineHopInfo, {
 	(3, blinding_point, option),
 	(5, amount_msat, required),
 	(7, cltv_expiry_height, required),
+	(9, forwading_fee_msat, required),
 });
 
 #[derive(Clone)]
@@ -2223,8 +2229,7 @@ where
 	#[rustfmt::skip]
 	fn pay_route_internal<NS: Deref, F>(
 		&self, route: &Route, payment_hash: PaymentHash, recipient_onion: &RecipientOnionFields,
-		keysend_preimage: Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>, bolt12_invoice: Option<&PaidBolt12Invoice>,
-		trampoline_forward_info: Option<&TrampolineForwardInfo>, payment_id: PaymentId,
+		keysend_preimage: Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>, bolt12_invoice: Option<&PaidBolt12Invoice>, trampoline_forward_info: Option<&TrampolineForwardInfo>, payment_id: PaymentId,
 		recv_value_msat: Option<u64>, onion_session_privs: &Vec<[u8; 32]>,
 		hold_htlcs_at_next_hop: bool, node_signer: &NS, best_block_height: u32,
 		send_payment_along_path: &F

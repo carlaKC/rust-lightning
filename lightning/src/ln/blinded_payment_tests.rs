@@ -2470,6 +2470,7 @@ fn replacement_onion(
 	route: Route, original_amt_msat: u64, starting_htlc_offset: u32, original_trampoline_cltv: u32,
 	payment_hash: PaymentHash, payment_secret: PaymentSecret, blinded: bool,
 ) -> msgs::OnionPacket {
+	assert!(!blinded || !matches!(test_case, TrampolineTestCase::Success));
 	let outer_session_priv = SecretKey::from_slice(&override_random_bytes[..]).unwrap();
 	let trampoline_session_priv = onion_utils::compute_trampoline_session_priv(&outer_session_priv);
 	let recipient_onion_fields = RecipientOnionFields::spontaneous_empty();
@@ -2666,20 +2667,22 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 	// Replace the onion to test different scenarios:
 	// - If !blinded: Creates a payload sending to an unblinded trampoline
 	// - If blinded: Modifies outer onion to create outer/inner mismatches if testing failures
-	update_message.map(|msg| {
-		msg.onion_routing_packet = replacement_onion(
-			test_case,
-			&secp_ctx,
-			override_random_bytes,
-			route,
-			original_amt_msat,
-			starting_htlc_offset,
-			original_trampoline_cltv,
-			payment_hash,
-			payment_secret,
-			blinded,
-		)
-	});
+	if !blinded || !matches!(test_case, TrampolineTestCase::Success) {
+		update_message.map(|msg| {
+			msg.onion_routing_packet = replacement_onion(
+				test_case,
+				&secp_ctx,
+				override_random_bytes,
+				route,
+				original_amt_msat,
+				starting_htlc_offset,
+				original_trampoline_cltv,
+				payment_hash,
+				payment_secret,
+				blinded,
+			)
+		});
+	}
 
 	let route: &[&Node] = &[&nodes[1], &nodes[2]];
 	let args = PassAlongPathArgs::new(

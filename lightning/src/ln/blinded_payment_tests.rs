@@ -2620,7 +2620,7 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 		(
 			eve_node_id,
 			PaymentRelay {
-				cltv_expiry_delta: eve_fred_policy.cltv_expiry_delta,
+				cltv_expiry_delta: eve_fred_policy.cltv_expiry_delta +1,
 				fee_proportional_millionths: eve_fred_policy.fee_proportional_millionths,
 				fee_base_msat: eve_fred_policy.fee_base_msat,
 			},

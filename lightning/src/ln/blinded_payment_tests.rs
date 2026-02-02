@@ -2524,7 +2524,7 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 
 	let original_amt_msat = 1000;
 	let original_trampoline_cltv = 72;
-	let starting_htlc_offset = 32;
+	let starting_htlc_offset = nodes[0].best_block_info().1;
 
 	let (payment_preimage, payment_hash, payment_secret) =
 		get_payment_preimage_hash(&nodes[2], Some(original_amt_msat), None);

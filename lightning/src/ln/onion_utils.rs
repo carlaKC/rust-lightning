@@ -2462,7 +2462,10 @@ pub(crate) fn decode_next_payment_hop<NS: NodeSigner>(
 					&hop_data.trampoline_packet.hop_data,
 					hop_data.trampoline_packet.hmac,
 					Some(payment_hash),
-					(blinding_point, &node_signer),
+					// TODO: this used to be blinding_point, I think that current_path key is
+					// correct because this is the trampoline equivalent of getting in "update_add"
+					// but it's 4pm so I have to re-check this.
+					(hop_data.current_path_key, node_signer),
 				);
 				match decoded_trampoline_hop {
 					Ok((

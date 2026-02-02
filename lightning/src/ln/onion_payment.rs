@@ -328,8 +328,7 @@ pub(super) fn create_recv_pending_htlc_info(
 			}, ..
 		} => {
 			check_trampoline_payment_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat)?;
-			// TODO: for receives, we don't need our outer onion data for anything beyond the above
-			// check so we can just provide the inner onion amounts.
+			// TODO: check which CLTV we need to use here.
 			(payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
 				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes()))
 		},
@@ -353,8 +352,6 @@ pub(super) fn create_recv_pending_htlc_info(
 					}
 				})?;
 			let payment_data = msgs::FinalOnionHopData { payment_secret, total_msat };
-			// TODO: for receives, we don't need our outer onion data for anything beyond the above
-			// check so we can just provide the inner onion amounts.
 			check_trampoline_payment_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat).map_err(|e| {
 				InboundHTLCErr {
 					reason: LocalHTLCFailureReason::InvalidOnionBlinding,
@@ -362,8 +359,10 @@ pub(super) fn create_recv_pending_htlc_info(
 					msg: e.msg,
 				}
 			})?;
+			// For blinded trampoline receives, we expect the encrypted data in our trampoline to
+			// contain the current block height (plus a few blocks for privacy).
 			(Some(payment_data), keysend_preimage, custom_tlvs,
-				sender_intended_htlc_amt_msat, cltv_expiry_height, None, Some(payment_context),
+				sender_intended_htlc_amt_msat, outer_hop_data.outgoing_cltv_value, None, Some(payment_context),
 				intro_node_blinding_point.is_none(), true, invoice_request, Some(trampoline_shared_secret.secret_bytes()))
 		},
 		onion_utils::Hop::Forward { .. } => {

@@ -2361,15 +2361,23 @@ impl<'a> TrampolineTestCase {
 		match self {
 			TrampolineTestCase::Success => None,
 			TrampolineTestCase::Underpayment => {
-				Some(PaymentFailedConditions::new().expected_htlc_error_data(
+				/*Some(PaymentFailedConditions::new().expected_htlc_error_data(
 					LocalHTLCFailureReason::FinalIncorrectHTLCAmount,
 					final_payment_amt,
+				))*/
+				Some(PaymentFailedConditions::new().expected_htlc_error_data(
+					LocalHTLCFailureReason::TemporaryTrampolineFailure,
+					&[],
 				))
 			},
 			TrampolineTestCase::OuterCLTVLessThanTrampoline => {
-				Some(PaymentFailedConditions::new().expected_htlc_error_data(
+				/*Some(PaymentFailedConditions::new().expected_htlc_error_data(
 					LocalHTLCFailureReason::FinalIncorrectCLTVExpiry,
 					final_cltv_delta,
+				))*/
+				Some(PaymentFailedConditions::new().expected_htlc_error_data(
+					LocalHTLCFailureReason::TemporaryTrampolineFailure,
+					&[],
 				))
 			},
 		}

@@ -2960,6 +2960,20 @@ impl OutboundPayments {
 			},
 		}
 	}
+
+	/// Looks up a trampoline forward by its payment id and returns the forwarding fee our node
+	/// earned, returning None if the payment is not found or it does not have trampoline forwading
+	/// information.
+	pub(crate) fn get_trampoline_forwarding_fee(&self, payment_id: &PaymentId) -> Option<u64> {
+		self.pending_outbound_payments.lock().unwrap().get(payment_id).and_then(|payment| {
+			match payment {
+				PendingOutboundPayment::Retryable { trampoline_forward_info, .. } => {
+					trampoline_forward_info.as_ref().map(|info| info.forwading_fee_msat)
+				},
+				_ => None,
+			}
+		})
+	}
 }
 
 /// Returns whether a payment with the given [`PaymentHash`] and [`PaymentId`] is, in fact, a

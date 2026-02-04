@@ -173,9 +173,6 @@ pub(crate) struct NextTrampolineHopInfo {
 	pub(crate) amount_msat: u64,
 	/// The cltv expiry height that the next trampoline is expecting.
 	pub(crate) cltv_expiry_height: u32,
-	/// The forwarding fee charged for this trampoline payment, persisted here so that we don't
-	/// need to look up the value of all our incoming/outgoing payments to calculate fee.
-	pub(crate) forwading_fee_msat: u64,
 }
 
 impl_writeable_tlv_based!(NextTrampolineHopInfo, {
@@ -183,7 +180,6 @@ impl_writeable_tlv_based!(NextTrampolineHopInfo, {
 	(3, blinding_point, option),
 	(5, amount_msat, required),
 	(7, cltv_expiry_height, required),
-	(9, forwading_fee_msat, required),
 });
 
 #[derive(Clone)]

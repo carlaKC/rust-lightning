@@ -19273,7 +19273,23 @@ impl<
 									pending_events_read = pending_events.into_inner().unwrap();
 								}
 							},
-							HTLCSource::TrampolineForward { .. } => todo!(),
+							HTLCSource::TrampolineForward { previous_hop_data, .. } => {
+								for prev_hop_data in previous_hop_data {
+									reconcile_pending_htlcs_with_monitor(
+										reconstruct_manager_from_monitors,
+										&mut already_forwarded_htlcs,
+										&mut forward_htlcs_legacy,
+										&mut pending_events_read,
+										&mut pending_intercepted_htlcs_legacy,
+										&mut decode_update_add_htlcs,
+										&mut decode_update_add_htlcs_legacy,
+										prev_hop_data,
+										&logger,
+										htlc.payment_hash,
+										monitor.channel_id(),
+									)
+								}
+							},
 						}
 					}
 					for (htlc_source, payment_hash) in monitor.get_onchain_failed_outbound_htlcs() {

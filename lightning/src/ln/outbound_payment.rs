@@ -2623,6 +2623,116 @@ impl OutboundPayments {
 		});
 	}
 
+	// Reports a failed HTLC that is part of an outgoing trampoline forward. Returns Some() if
+	// the incoming HTLC(s) associated with the trampoline should be failed back.
+	pub(super) fn trampoline_htlc_failed<L: Logger>(
+		&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason,
+		secp_ctx: &Secp256k1<secp256k1::All>, logger: &WithContext<L>,
+	) -> Option<DecodedOnionFailure> {
+		#[cfg(any(test, feature = "_test_utils"))]
+		let decoded_onion = onion_error.decode_onion_failure(secp_ctx, &logger, &source);
+
+		#[cfg(not(any(test, feature = "_test_utils")))]
+		let decoded_onion = onion_error.decode_onion_failure(secp_ctx, &logger, &source);
+
+		let (payment_id, path, session_priv) = match source {
+			// TODO: don't unwrap and handle error appropriately
+			HTLCSource::TrampolineForward { outbound_payment, .. } => {
+				let outbound_payment = outbound_payment.clone().unwrap();
+				(outbound_payment.payment_id, outbound_payment.path, outbound_payment.session_priv)
+			},
+			_ => panic!("can't fail trampoline forward with non-trampoline source"),
+		};
+
+		let mut session_priv_bytes = [0; 32];
+		session_priv_bytes.copy_from_slice(&session_priv[..]);
+		let mut outbounds = self.pending_outbound_payments.lock().unwrap();
+
+		// If any payments already need retry, there's no need to generate a redundant
+		// `PendingHTLCsForwardable`.
+		let already_awaiting_retry = outbounds.iter().any(|(_, pmt)| {
+			let mut awaiting_retry = false;
+			if pmt.is_auto_retryable_now() {
+				if let PendingOutboundPayment::Retryable { pending_amt_msat, total_msat, .. } = pmt
+				{
+					if pending_amt_msat < total_msat {
+						awaiting_retry = true;
+					}
+				}
+			}
+			awaiting_retry
+		});
+
+		let attempts_remaining =
+			if let hash_map::Entry::Occupied(mut payment) = outbounds.entry(payment_id) {
+				if !payment.get_mut().remove(&session_priv_bytes, Some(&path)) {
+					log_trace!(
+						logger,
+						"Received duplicative fail for HTLC with payment_hash {}",
+						&payment_hash
+					);
+					return None;
+				}
+				if payment.get().is_fulfilled() {
+					log_trace!(
+						logger,
+						"Received failure of HTLC with payment_hash {} after payment completion",
+						&payment_hash
+					);
+					return None;
+				}
+				let mut is_retryable_now = payment.get().is_auto_retryable_now();
+				if let Some(scid) = decoded_onion.short_channel_id {
+					// TODO: If we decided to blame ourselves (or one of our channels) in
+					// process_onion_failure we should close that channel as it implies our
+					// next-hop is needlessly blaming us!
+					payment.get_mut().insert_previously_failed_scid(scid);
+				}
+				if decoded_onion.failed_within_blinded_path {
+					debug_assert!(decoded_onion.short_channel_id.is_none());
+					if let Some(bt) = &path.blinded_tail {
+						payment.get_mut().insert_previously_failed_blinded_path(&bt);
+					} else {
+						debug_assert!(false);
+					}
+				}
+
+				if !is_retryable_now || decoded_onion.payment_failed_permanently {
+					let reason = if decoded_onion.payment_failed_permanently {
+						PaymentFailureReason::RecipientRejected
+					} else {
+						PaymentFailureReason::RetriesExhausted
+					};
+					payment.get_mut().mark_abandoned(reason);
+					is_retryable_now = false;
+				}
+				if payment.get().remaining_parts() == 0 {
+					if let PendingOutboundPayment::Abandoned { .. } = payment.get() {
+						payment.remove();
+						return Some(decoded_onion);
+					}
+				}
+				is_retryable_now
+			} else {
+				log_trace!(
+					logger,
+					"Received fail for HTLC with payment_hash {} not found.",
+					&payment_hash
+				);
+				return Some(decoded_onion);
+			};
+		core::mem::drop(outbounds);
+		log_trace!(logger, "Failing Trampoline forward HTLC with payment_hash {}", &payment_hash);
+
+		// If we miss abandoning the payment above, we *must* generate an event here or else the
+		// payment will sit in our outbounds forever.
+		if attempts_remaining && !already_awaiting_retry {
+			return None;
+		};
+
+		return Some(decoded_onion);
+	}
+
 	pub(super) fn fail_htlc<L: Logger>(
 		&self, source: &HTLCSource, payment_hash: &PaymentHash, onion_error: &HTLCFailReason,
 		path: &Path, session_priv: &SecretKey, payment_id: &PaymentId,

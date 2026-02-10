@@ -8056,7 +8056,7 @@ impl<
 	fn handle_trampoline_htlc(
 		&self, claimable_htlc: ClaimableHTLC, onion_fields: RecipientOnionFields,
 		payment_hash: PaymentHash, incoming_trampoline_shared_secret: [u8; 32],
-		next_hop_info: NextTrampolineHopInfo, next_node_id: PublicKey, outgoing_amt_msat: u64,
+		next_hop_info: NextTrampolineHopInfo, next_node_id: PublicKey,
 	) -> Result<(), bool> {
 		// TODO: we need to be able to return the source + error here (?)
 		let mut trampoline_payments = self.awaiting_trampoline_forwards.lock().unwrap();
@@ -8097,7 +8097,7 @@ impl<
 			)
 		};
 		let proportional_fee =
-			forwarding_fee_proportional_millionths as u64 * outgoing_amt_msat / 1_000_000;
+			forwarding_fee_proportional_millionths as u64 * next_hop_info.amount_msat / 1_000_000;
 		let our_forwarding_fee_msat = proportional_fee + forwarding_fee_base_msat as u64;
 
 		let max_total_routing_fee_msat = match incoming_amt_msat
@@ -8141,7 +8141,7 @@ impl<
 				previously_failed_channels: vec![],
 				previously_failed_blinded_path_idxs: vec![],
 			},
-			final_value_msat: outgoing_amt_msat,
+			final_value_msat: next_hop_info.amount_msat,
 			max_total_routing_fee_msat: Some(max_total_routing_fee_msat),
 		};
 
@@ -8155,7 +8155,7 @@ impl<
 			"Attempting to forward trampoline payment that pays us {} with {} fee budget ({} total, {} cltv max)",
 			our_forwarding_fee_msat,
 			max_total_routing_fee_msat,
-			outgoing_amt_msat,
+			next_hop_info.amount_msat,
 			max_total_cltv_expiry_delta,
 		);
 		let result = self.pending_outbound_payments.send_payment_for_trampoline_forward(
@@ -8219,7 +8219,6 @@ impl<
 								incoming_amt_msat,
 								outgoing_amt_msat,
 								skimmed_fee_msat,
-								outgoing_cltv_value,
 								..
 							},
 						..
@@ -8301,6 +8300,8 @@ impl<
 							blinded,
 							incoming_cltv_expiry,
 							incoming_multipath_data,
+							next_trampoline_amt_msat,
+							next_trampoline_cltv_expiry,
 						} => {
 							let onion_fields = RecipientOnionFields {
 								payment_secret: incoming_multipath_data
@@ -8333,7 +8334,8 @@ impl<
 												.ok()
 											})
 										}),
-										cltv_expiry_height: outgoing_cltv_value,
+										amount_msat: next_trampoline_amt_msat,
+										cltv_expiry_height: next_trampoline_cltv_expiry,
 									},
 									next_trampoline,
 								},
@@ -8559,7 +8561,6 @@ impl<
 								trampoline_shared_secret.unwrap(), // TODO: don't unwrap!
 								next_hop_info,
 								next_trampoline,
-								outgoing_amt_msat,
 							) {
 								fail_htlc!(claimable_htlc, payment_hash, committed_to_claimable);
 							}

@@ -8237,12 +8237,12 @@ impl<
 				"Dispatched trampoline payment: {} was not present in awaiting inbound",
 				payment_hash
 			);
-			return Err(committed_to_claimable);
+			return Err(false);
 		}
 
 		if let Err(_retryable_send_failure) = result {
 			// 	LocalHTLCFailureReason::TemporaryTrampolineFailure,
-			return Err(committed_to_claimable);
+			return Err(false);
 		};
 		Ok(())
 	}

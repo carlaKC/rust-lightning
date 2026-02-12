@@ -8097,15 +8097,13 @@ impl<
 	}
 
 	// Handles the addition of a HTLC associated with a trampoline forward that we need to accumulate
-	// on the incoming link before forwarding onwards. Err(bool) indicates
-	// whether we have failed after adding committing to the HTLC - callers should assert that this
-	// value is false.
+	// on the incoming link before forwarding onwards. If the HTLC is failed, it returns the source
+	// and error that should be used to fail the HTLC(s) back.
 	fn handle_trampoline_htlc(
 		&self, claimable_htlc: ClaimableHTLC, onion_fields: RecipientOnionFields,
 		payment_hash: PaymentHash, incoming_trampoline_shared_secret: [u8; 32],
 		next_hop_info: NextTrampolineHopInfo, next_node_id: PublicKey,
-	) -> Result<(), bool> {
-		// TODO: we need to be able to return the source + error here (?)
+	) -> Result<(), (HTLCSource, HTLCFailReason)> {
 		let mut trampoline_payments = self.awaiting_trampoline_forwards.lock().unwrap();
 
 		let mut committed_to_claimable = false;
@@ -8119,6 +8117,7 @@ impl<
 		});
 
 		// If MPP hasn't fully arrived yet, return early (saving indentation below).
+		let prev_hop = claimable_htlc.prev_hop.clone();
 		if !self
 			.check_claimable_incoming_htlc(
 				claimable_payment,
@@ -8126,8 +8125,24 @@ impl<
 				onion_fields,
 				payment_hash,
 			)
-			.map_err(|_| committed_to_claimable)?
-		{
+			.map_err(|_| {
+				debug_assert!(!committed_to_claimable);
+				(
+					// When we couldn't add a new HTLC, we just fail back our last received htlc,
+					// allowing others to wait for more MPP parts to arrive. If this was the first
+					// htlc we'll eventually clean up the awaiting_trampoline_forwards entry in
+					// our MPP timeout logic.
+					HTLCSource::TrampolineForward {
+						previous_hop_data: vec![prev_hop],
+						incoming_trampoline_shared_secret,
+						outbound_payment: None,
+					},
+					HTLCFailReason::reason(
+						LocalHTLCFailureReason::InvalidTrampolineForward,
+						vec![],
+					),
+				)
+			})? {
 			return Ok(());
 		}
 
@@ -8147,13 +8162,34 @@ impl<
 			forwarding_fee_proportional_millionths as u64 * next_hop_info.amount_msat / 1_000_000;
 		let our_forwarding_fee_msat = proportional_fee + forwarding_fee_base_msat as u64;
 
+		let trampoline_source = || -> HTLCSource {
+			HTLCSource::TrampolineForward {
+				previous_hop_data: claimable_payment
+					.htlcs
+					.iter()
+					.map(|htlc| htlc.prev_hop.clone())
+					.collect(),
+				incoming_trampoline_shared_secret,
+				outbound_payment: None,
+			}
+		};
+		let trampoline_failure = || -> HTLCFailReason {
+			let mut err_data = Vec::with_capacity(10);
+			err_data.extend_from_slice(&forwarding_fee_base_msat.to_be_bytes());
+			err_data.extend_from_slice(&forwarding_fee_proportional_millionths.to_be_bytes());
+			err_data.extend_from_slice(&(cltv_delta as u16).to_be_bytes());
+			HTLCFailReason::reason(
+				LocalHTLCFailureReason::TrampolineFeeOrExpiryInsufficient,
+				err_data,
+			)
+		};
+
 		let max_total_routing_fee_msat = match incoming_amt_msat
 			.checked_sub(our_forwarding_fee_msat + next_hop_info.amount_msat)
 		{
 			Some(amount) => amount,
 			None => {
-				// LocalHTLCFailureReason::TrampolineFeeOrExpiryInsufficient,
-				return Err(committed_to_claimable);
+				return Err((trampoline_source(), trampoline_failure()));
 			},
 		};
 
@@ -8161,8 +8197,7 @@ impl<
 			match incoming_cltv_expiry.checked_sub(next_hop_info.cltv_expiry_height + cltv_delta) {
 				Some(cltv_delta) => cltv_delta,
 				None => {
-					// LocalHTLCFailureReason::TrampolineFeeOrExpiryInsufficient
-					return Err(committed_to_claimable);
+					return Err((trampoline_source(), trampoline_failure()));
 				},
 			};
 
@@ -8231,18 +8266,24 @@ impl<
 			&WithContext::from(&self.logger, None, None, Some(payment_hash)),
 		);
 
+		let source = trampoline_source();
 		if trampoline_payments.remove(&payment_hash).is_none() {
 			log_error!(
 				&self.logger,
 				"Dispatched trampoline payment: {} was not present in awaiting inbound",
 				payment_hash
 			);
-			return Err(false);
+			return Err((
+				source,
+				HTLCFailReason::reason(LocalHTLCFailureReason::TemporaryTrampolineFailure, vec![]),
+			));
 		}
 
 		if let Err(_retryable_send_failure) = result {
-			// 	LocalHTLCFailureReason::TemporaryTrampolineFailure,
-			return Err(false);
+			return Err((
+				source,
+				HTLCFailReason::reason(LocalHTLCFailureReason::TemporaryTrampolineFailure, vec![]),
+			));
 		};
 		Ok(())
 	}
@@ -8613,7 +8654,7 @@ impl<
 						},
 						OnionPayload::Trampoline { ref next_hop_info, next_trampoline } => {
 							let next_hop_info = next_hop_info.clone();
-							if let Err(committed_to_claimable) = self.handle_trampoline_htlc(
+							if let Err((htlc_source, failure_reason)) = self.handle_trampoline_htlc(
 								claimable_htlc,
 								onion_fields,
 								payment_hash,
@@ -8622,7 +8663,13 @@ impl<
 								next_hop_info,
 								next_trampoline,
 							) {
-								fail_receive_htlc!(committed_to_claimable);
+								failed_forwards.push((
+									htlc_source,
+									payment_hash,
+									failure_reason,
+									HTLCHandlingFailureType::TrampolineForward {},
+								));
+								continue 'next_forwardable_htlc;
 							}
 						},
 					}

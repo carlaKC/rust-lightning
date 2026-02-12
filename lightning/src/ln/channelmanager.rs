@@ -8432,7 +8432,7 @@ impl<
 						counterparty_skimmed_fee_msat: skimmed_fee_msat,
 					};
 
-					macro_rules! fail_htlc {
+					macro_rules! fail_receive_htlc {
 						($committed_to_claimable: expr) => {
 							let htlc_source = HTLCSource::PreviousHopData(HTLCPreviousHopData {
 								prev_outbound_scid_alias,
@@ -8492,7 +8492,7 @@ impl<
 								Ok(result) => result,
 								Err(()) => {
 									log_trace!(self.logger, "Failing new HTLC with payment_hash {} as payment verification failed", &payment_hash);
-									fail_htlc!(false);
+									fail_receive_htlc!(false);
 								},
 							};
 							if let Some(min_final_cltv_expiry_delta) = min_final_cltv_expiry_delta {
@@ -8502,12 +8502,12 @@ impl<
 								if (cltv_expiry as u64) < expected_min_expiry_height {
 									log_trace!(self.logger, "Failing new HTLC with payment_hash {} as its CLTV expiry was too soon (had {}, earliest expected {})",
 									&payment_hash, cltv_expiry, expected_min_expiry_height);
-									fail_htlc!(false);
+									fail_receive_htlc!(false);
 								}
 							}
 							payment_preimage
 						} else {
-							fail_htlc!(false);
+							fail_receive_htlc!(false);
 						}
 					} else {
 						None
@@ -8523,7 +8523,7 @@ impl<
 							let purpose = match from_parts_res {
 								Ok(purpose) => purpose,
 								Err(()) => {
-									fail_htlc!(false);
+									fail_receive_htlc!(false);
 								},
 							};
 
@@ -8535,7 +8535,7 @@ impl<
 								receiver_node_id,
 								new_events,
 							) {
-								fail_htlc!(committed_to_claimable);
+								fail_receive_htlc!(committed_to_claimable);
 							}
 						},
 						OnionPayload::Spontaneous(keysend_preimage) => {
@@ -8550,7 +8550,7 @@ impl<
 											false,
 											"We checked that payment_data is Some above"
 										);
-										fail_htlc!(false);
+										fail_receive_htlc!(false);
 									},
 								};
 
@@ -8569,13 +8569,13 @@ impl<
 											verified_invreq.amount_msats()
 										{
 											if payment_data.total_msat < invreq_amt_msat {
-												fail_htlc!(false);
+												fail_receive_htlc!(false);
 											}
 										}
 										verified_invreq
 									},
 									None => {
-										fail_htlc!(false);
+										fail_receive_htlc!(false);
 									},
 								};
 								let payment_purpose_context =
@@ -8591,12 +8591,12 @@ impl<
 								match from_parts_res {
 									Ok(purpose) => purpose,
 									Err(()) => {
-										fail_htlc!(false);
+										fail_receive_htlc!(false);
 									},
 								}
 							} else if payment_context.is_some() {
 								log_trace!(self.logger, "Failing new HTLC with payment_hash {}: received a keysend payment to a non-async payments context {:#?}", payment_hash, payment_context);
-								fail_htlc!(false);
+								fail_receive_htlc!(false);
 							} else {
 								events::PaymentPurpose::SpontaneousPayment(keysend_preimage)
 							};
@@ -8608,7 +8608,7 @@ impl<
 								receiver_node_id,
 								new_events,
 							) {
-								fail_htlc!(committed_to_claimable);
+								fail_receive_htlc!(committed_to_claimable);
 							}
 						},
 						OnionPayload::Trampoline { ref next_hop_info, next_trampoline } => {
@@ -8622,7 +8622,7 @@ impl<
 								next_hop_info,
 								next_trampoline,
 							) {
-								fail_htlc!(committed_to_claimable);
+								fail_receive_htlc!(committed_to_claimable);
 							}
 						},
 					}

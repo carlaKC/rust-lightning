@@ -2642,7 +2642,7 @@ impl OutboundPayments {
 			},
 			_ => {
 				debug_assert!(false, "trampoline payment failed with no dispatch information");
-				return None
+				return None;
 			},
 		};
 

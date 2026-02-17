@@ -9418,7 +9418,7 @@ impl<
 								blinded_failure,
 								&onion_error,
 								incoming_packet_shared_secret,
-								&incoming_trampoline_shared_secret,
+								&Some(*incoming_trampoline_shared_secret),
 								&None,
 								*htlc_id,
 							),

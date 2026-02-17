@@ -9011,6 +9011,10 @@ impl<
 
 			self.claimable_payments.lock().unwrap().claimable_payments.retain(
 				|payment_hash, payment| {
+					if payment.htlcs.is_empty() {
+						debug_assert!(false);
+						return false;
+					}
 					if let OnionPayload::Invoice { .. } = payment.htlcs[0].onion_payload {
 						let htlc_total_msat: u64 =
 							payment.htlcs.iter().map(|h| h.sender_intended_value).sum();

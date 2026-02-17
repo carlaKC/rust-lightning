@@ -9378,7 +9378,7 @@ impl<
 			HTLCSource::TrampolineForward {
 				previous_hop_data,
 				outbound_payment,
-				incoming_trampoline_shared_secret,
+				..
 			} => {
 				let trampoline_error = match outbound_payment {
 					Some(_) => self
@@ -9426,7 +9426,7 @@ impl<
 								blinded_failure,
 								&err,
 								incoming_packet_shared_secret,
-								&Some(*incoming_trampoline_shared_secret),
+								&None,
 								&None,
 								*htlc_id,
 							),
@@ -16058,7 +16058,7 @@ impl<
 			self.awaiting_trampoline_forwards.lock().unwrap().retain(|payment_hash, payment| {
 				if payment.htlcs.is_empty() {
 					debug_assert!(false);
-					return false
+					return false;
 				}
 				if let OnionPayload::Trampoline { .. } = payment.htlcs[0].onion_payload {
 					let htlc_timed_out = payment

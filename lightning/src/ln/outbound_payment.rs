@@ -2650,21 +2650,6 @@ impl OutboundPayments {
 		session_priv_bytes.copy_from_slice(&session_priv[..]);
 		let mut outbounds = self.pending_outbound_payments.lock().unwrap();
 
-		// If any payments already need retry, there's no need to generate a redundant
-		// `PendingHTLCsForwardable`.
-		let already_awaiting_retry = outbounds.iter().any(|(_, pmt)| {
-			let mut awaiting_retry = false;
-			if pmt.is_auto_retryable_now() {
-				if let PendingOutboundPayment::Retryable { pending_amt_msat, total_msat, .. } = pmt
-				{
-					if pending_amt_msat < total_msat {
-						awaiting_retry = true;
-					}
-				}
-			}
-			awaiting_retry
-		});
-
 		let attempts_remaining =
 			if let hash_map::Entry::Occupied(mut payment) = outbounds.entry(payment_id) {
 				if !payment.get_mut().remove(&session_priv_bytes, Some(&path)) {
@@ -2728,7 +2713,7 @@ impl OutboundPayments {
 
 		// If we miss abandoning the payment above, we *must* generate an event here or else the
 		// payment will sit in our outbounds forever.
-		if attempts_remaining && !already_awaiting_retry {
+		if attempts_remaining {
 			return None;
 		};
 

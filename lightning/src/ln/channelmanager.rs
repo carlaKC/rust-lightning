@@ -482,6 +482,9 @@ impl PendingAddHTLCInfo {
 			PendingHTLCRouting::Receive { trampoline_shared_secret, .. } => {
 				trampoline_shared_secret
 			},
+			PendingHTLCRouting::TrampolineForward { incoming_shared_secret, .. } => {
+				Some(incoming_shared_secret)
+			},
 			_ => None,
 		};
 
@@ -9047,7 +9050,8 @@ impl<
 					let mpp_timeout = check_mpp_timeout(htlc_total_msat, &mut payment.htlcs);
 					if mpp_timeout {
 						let incoming_trampoline_shared_secret =
-							payment.htlcs[0].prev_hop.incoming_packet_shared_secret;
+							payment.htlcs[0].prev_hop.trampoline_shared_secret.unwrap(); // TODO: no
+						// unwrap
 						let previous_hop_data =
 							payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
 
@@ -9375,11 +9379,7 @@ impl<
 					None,
 				));
 			},
-			HTLCSource::TrampolineForward {
-				previous_hop_data,
-				outbound_payment,
-				..
-			} => {
+			HTLCSource::TrampolineForward { previous_hop_data, outbound_payment, .. } => {
 				let trampoline_error = match outbound_payment {
 					Some(_) => self
 						.pending_outbound_payments
@@ -16067,7 +16067,8 @@ impl<
 						.any(|htlc| htlc.check_onchain_timeout(height, HTLC_FAIL_BACK_BUFFER));
 					if htlc_timed_out {
 						let incoming_trampoline_shared_secret =
-							payment.htlcs[0].prev_hop.incoming_packet_shared_secret;
+							payment.htlcs[0].prev_hop.trampoline_shared_secret.unwrap(); // TODO: no
+						// unwrap
 						let previous_hop_data =
 							payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
 

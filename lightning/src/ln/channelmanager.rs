@@ -9416,7 +9416,7 @@ impl<
 							*short_channel_id,
 							get_htlc_forward_failure(
 								blinded_failure,
-								&onion_error,
+								&err,
 								incoming_packet_shared_secret,
 								&Some(*incoming_trampoline_shared_secret),
 								&None,

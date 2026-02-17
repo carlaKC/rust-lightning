@@ -9367,7 +9367,11 @@ impl<
 					None,
 				));
 			},
-			HTLCSource::TrampolineForward { previous_hop_data, outbound_payment, .. } => {
+			HTLCSource::TrampolineForward {
+				previous_hop_data,
+				outbound_payment,
+				incoming_trampoline_shared_secret,
+			} => {
 				let trampoline_error = match outbound_payment {
 					Some(_) => self
 						.pending_outbound_payments
@@ -9378,8 +9382,7 @@ impl<
 							&self.secp_ctx,
 							&WithContext::from(&self.logger, None, None, Some(*payment_hash)),
 						)
-						.map(|e|
-						match e {
+						.map(|e| match e {
 							DecodedOnionFailure {
 								onion_error_code: Some(error_code),
 								onion_error_data: Some(error_data),
@@ -9415,7 +9418,7 @@ impl<
 								blinded_failure,
 								&onion_error,
 								incoming_packet_shared_secret,
-								&None,
+								&incoming_trampoline_shared_secret,
 								&None,
 								*htlc_id,
 							),

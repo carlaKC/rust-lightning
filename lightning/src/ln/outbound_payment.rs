@@ -2530,6 +2530,14 @@ impl OutboundPayments {
 						}, None));
 					}
 				}
+			} else if let HTLCSource::TrampolineForward {
+				outbound_payment: Some(trampoline_dispatch), ..
+			} = source {
+				let session_priv_bytes = trampoline_dispatch.session_priv.secret_bytes();
+				if let hash_map::Entry::Occupied(mut payment) = outbounds.entry(trampoline_dispatch.payment_id) {
+					assert!(payment.get().is_fulfilled());
+					payment.get_mut().remove(&session_priv_bytes, None);
+				}
 			}
 		}
 	}
@@ -3022,18 +3030,34 @@ impl OutboundPayments {
 		}
 	}
 
-	/// Looks up a trampoline forward by its payment id and returns the forwarding fee our node
-	/// earned, returning None if the payment is not found or it does not have trampoline forwading
-	/// information.
-	pub(crate) fn get_trampoline_forwarding_fee(&self, payment_id: &PaymentId) -> Option<u64> {
-		self.pending_outbound_payments.lock().unwrap().get(payment_id).and_then(|payment| {
-			match payment {
+	/// Looks up a trampoline forward by its payment id, marks it as fulfilled, and returns the
+	/// forwarding fee our node earned. Returns None if the payment is not found or it does not
+	/// have trampoline forwarding information.
+	///
+	/// The fee must be read before marking fulfilled because `trampoline_forward_info` is only
+	/// available on the `Retryable` variant.
+	pub(crate) fn claim_trampoline_forward(
+		&self, payment_id: &PaymentId, session_priv: &SecretKey, from_onchain: bool,
+	) -> Option<u64> {
+		let mut outbounds = self.pending_outbound_payments.lock().unwrap();
+		if let hash_map::Entry::Occupied(mut payment) = outbounds.entry(*payment_id) {
+			let fee = match payment.get() {
 				PendingOutboundPayment::Retryable { trampoline_forward_info, .. } => {
 					trampoline_forward_info.as_ref().map(|info| info.forwading_fee_msat)
 				},
 				_ => None,
+			};
+			if !payment.get().is_fulfilled() {
+				payment.get_mut().mark_fulfilled();
 			}
-		})
+			if from_onchain {
+				let session_priv_bytes = session_priv.secret_bytes();
+				payment.get_mut().remove(&session_priv_bytes, None);
+			}
+			fee
+		} else {
+			None
+		}
 	}
 }
 

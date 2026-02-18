@@ -9051,7 +9051,7 @@ impl<
 					if mpp_timeout {
 						let incoming_trampoline_shared_secret =
 							payment.htlcs[0].prev_hop.trampoline_shared_secret.unwrap(); // TODO: no
-						// unwrap
+															 // unwrap
 						let previous_hop_data =
 							payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
 
@@ -10130,6 +10130,8 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 				});
 
 				Some((source, hold_times))
+			} else if let HTLCSource::TrampolineForward { .. } = source {
+				Some((source, Vec::new()))
 			} else {
 				None
 			}
@@ -10245,11 +10247,13 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 				);
 			},
 			HTLCSource::TrampolineForward { previous_hop_data, outbound_payment, .. } => {
-				let total_fee_earned_msat = match outbound_payment {
+				let total_fee_earned_msat = match &outbound_payment {
 					Some(trampoline_dispatch) => {
-						let fee = self
-							.pending_outbound_payments
-							.get_trampoline_forwarding_fee(&trampoline_dispatch.payment_id);
+						let fee = self.pending_outbound_payments.claim_trampoline_forward(
+							&trampoline_dispatch.payment_id,
+							&trampoline_dispatch.session_priv,
+							from_onchain,
+						);
 						debug_assert!(
 							fee.is_some(),
 							"Trampoline payment with unknown payment_id: {} settled",
@@ -16068,7 +16072,7 @@ impl<
 					if htlc_timed_out {
 						let incoming_trampoline_shared_secret =
 							payment.htlcs[0].prev_hop.trampoline_shared_secret.unwrap(); // TODO: no
-						// unwrap
+															 // unwrap
 						let previous_hop_data =
 							payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
 

@@ -1339,8 +1339,8 @@ pub enum Event {
 	/// This event is generated when a payment has been successfully forwarded through us and a
 	/// forwarding fee earned.
 	///
-	/// Note that downgrading from 0.3 with pending trampoline forwards that use multipart payments
-	/// will produce an event that only provides information about the first htlc that was
+	/// Note that downgrading from 0.3 and above with pending trampoline forwards that use multipart
+	/// payments will produce an event that only provides information about the first htlc that was
 	/// received/dispatched.
 	///
 	/// # Failure Behavior and Persistence

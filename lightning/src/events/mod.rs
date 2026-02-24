@@ -2595,7 +2595,7 @@ impl MaybeReadable for Event {
 						// always write legacy fields to be backwards compatible, and expect
 						// this field to be set because the legacy field was only None for versions
 						// before 0.0.107 and we do not allow upgrades with pending forwards to 0.1
-						// for any version before 0.0.123.
+						// for any version 0.0.123 or earlier.
 						(17, prev_htlcs, (default_value, vec![HTLCLocator{
 							channel_id: prev_channel_id_legacy.unwrap(),
 							user_channel_id: prev_user_channel_id_legacy,

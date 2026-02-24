@@ -799,7 +799,7 @@ type FailedHTLCForward = (HTLCSource, PaymentHash, HTLCFailReason, HTLCHandlingF
 mod fuzzy_channelmanager {
 	use super::*;
 
-	/// Information about the outgoing payment dispatched to forward to the next trampoline.
+	/// Information about a HTLC sent as part of a (possibly MPP) payment to the next trampoline.
 	#[derive(Clone, Debug, PartialEq, Eq)]
 	pub struct TrampolineDispatch {
 		/// The payment ID used for the outbound payment.

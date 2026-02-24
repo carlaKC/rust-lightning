@@ -760,6 +760,8 @@ pub(crate) enum SentHTLCId {
 	TrampolineForward { session_priv: [u8; SECRET_KEY_SIZE] },
 }
 impl SentHTLCId {
+	/// Creates an identifier for the [`HTLCSource`] provided. Note that for MPP trampoline payments
+	/// each outgoing HTLC will have a distinct identifier.
 	pub(crate) fn from_source(source: &HTLCSource) -> Self {
 		match source {
 			HTLCSource::PreviousHopData(hop_data) => Self::PreviousHopData {

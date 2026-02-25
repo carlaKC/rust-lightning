@@ -1383,14 +1383,19 @@ pub(crate) enum MonitorUpdateCompletionAction {
 		/// Not written to disk.
 		pending_mpp_claim: Option<(PublicKey, ChannelId, PendingMPPClaimPointer)>,
 	},
-	/// Indicates an [`events::Event`] should be surfaced to the user and possibly resume the
-	/// operation of another channel.
+	/// Indicates that the operation of the downstream channel should be resumed, and an
+	/// [`events::Event`] may be surfaced to the user if required.
 	///
 	/// This is usually generated when we've forwarded an HTLC and want to block the outbound edge
 	/// from completing a monitor update which removes the payment preimage until the inbound edge
 	/// completes a monitor update containing the payment preimage. In that case, after the inbound
-	/// edge completes, we will surface an [`Event::PaymentForwarded`] as well as unblock the
-	/// outbound edge.
+	/// edge completes, we will surface an [`Event::PaymentForwarded`] where required as well as
+	/// unblock the outbound edge.
+	///
+	/// For trampoline forwards with multiple incoming HTLCs, a [`Event::PaymentForwarded`] will
+	/// only be surfaced on completion of the first inbound monitor's update. This event is used
+	/// over [`FreeOtherChannelImmediately`] because subsequent inbound trampoline HTLCs are not
+	/// duplicated claims, they're just claims that don't need another event.
 	EmitEventAndFreeOtherChannel {
 		event: Option<events::Event>,
 		downstream_counterparty_and_funding_outpoint: Option<EventUnblockedChannel>,

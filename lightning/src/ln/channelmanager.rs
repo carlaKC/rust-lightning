@@ -9414,6 +9414,32 @@ impl<
 		let _prev_channel_id = hop_data.channel_id;
 		let completed_blocker = RAAMonitorUpdateBlockingAction::from_prev_hop_data(&hop_data);
 
+		// Block the next RAA monitor update on the outbound channel until the inbound channel's
+		// monitor has durably persisted the preimage. On startup replay this re-adds the blocker
+		// that was originally set during `internal_update_fulfill_htlc`.
+		{
+			let per_peer_state = self.per_peer_state.read().unwrap();
+			if let Some(peer_state_mtx) = per_peer_state.get(&next_channel_counterparty_node_id) {
+				let mut peer_state = peer_state_mtx.lock().unwrap();
+				let logger = WithContext::from(
+					&self.logger,
+					Some(next_channel_counterparty_node_id),
+					Some(next_channel_id),
+					None,
+				);
+				log_trace!(logger,
+					"Holding the next revoke_and_ack until the preimage is durably persisted in the inbound edge's ChannelMonitor",
+				);
+				let blockers = peer_state
+					.actions_blocking_raa_monitor_updates
+					.entry(next_channel_id)
+					.or_insert_with(Vec::new);
+				if !blockers.contains(&completed_blocker) {
+					blockers.push(completed_blocker.clone());
+				}
+			}
+		}
+
 		// Obtain hold time, if available.
 		let hold_time = hold_time_since(send_timestamp).unwrap_or(0);
 
@@ -12393,31 +12419,10 @@ This indicates a bug inside LDK. Please report this error at https://github.com/
 							chan.update_fulfill_htlc(&msg),
 							chan_entry
 						);
-						let prev_hops = match &res.0 {
-							HTLCSource::PreviousHopData(prev_hop) => vec![prev_hop],
-							HTLCSource::TrampolineForward { previous_hop_data, .. } => {
-								previous_hop_data.iter().collect()
-							},
-							_ => vec![],
-						};
-						let logger = WithChannelContext::from(&self.logger, &chan.context, None);
-						for prev_hop in prev_hops {
-							log_trace!(logger,
-								"Holding the next revoke_and_ack until the preimage is durably persisted in the inbound edge's ChannelMonitor",
-							);
-							peer_state
-								.actions_blocking_raa_monitor_updates
-								.entry(msg.channel_id)
-								.or_insert_with(Vec::new)
-								.push(RAAMonitorUpdateBlockingAction::from_prev_hop_data(prev_hop));
-						}
-
-						// Note that we do not need to push an `actions_blocking_raa_monitor_updates`
-						// entry here, even though we *do* need to block the next RAA monitor update.
-						// We do this instead in the `claim_funds_internal` by attaching a
-						// `ReleaseRAAChannelMonitorUpdate` action to the event generated when the
-						// outbound HTLC is claimed. This is guaranteed to all complete before we
-						// process the RAA as messages are processed from single peers serially.
+						// TODO: this comment seems off?
+						// Note that we do not need to push `ForwardedPaymentInboundClaim`
+						// blockers here - `claim_funds_from_htlc_forward_hop` handles
+						// that for both the normal and startup replay paths.
 						funding_txo = chan
 							.funding
 							.get_funding_txo()

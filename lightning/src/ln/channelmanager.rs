@@ -122,8 +122,6 @@ use crate::routing::router::{
 };
 use crate::sign::ecdsa::EcdsaChannelSigner;
 use crate::sign::{EntropySource, NodeSigner, Recipient, SignerProvider};
-#[cfg(any(feature = "_test_utils", test))]
-use crate::types::features::Bolt11InvoiceFeatures;
 use crate::types::features::{
 	Bolt11InvoiceFeatures, Bolt12InvoiceFeatures, ChannelFeatures, ChannelTypeFeatures,
 	InitFeatures, NodeFeatures,

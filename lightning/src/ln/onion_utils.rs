@@ -1234,23 +1234,18 @@ fn process_onion_failure_inner<T: secp256k1::Signing, L: Logger>(
 				let um = gen_um_from_shared_secret(shared_secret.as_ref());
 				let mut hmac = HmacEngine::<Sha256>::new(&um);
 				hmac.input(&encrypted_packet.data[32..]);
-				if &Hmac::from_engine(hmac).to_byte_array()
-					== &encrypted_packet.data[..32]
-				{
+				if &Hmac::from_engine(hmac).to_byte_array() == &encrypted_packet.data[..32] {
 					// The error was addressed to this blinded hop (trampoline recipient).
-					let err_packet = msgs::DecodedOnionErrorPacket::read(
-						&mut Cursor::new(&encrypted_packet.data),
-					);
+					let err_packet = msgs::DecodedOnionErrorPacket::read(&mut Cursor::new(
+						&encrypted_packet.data,
+					));
 					if let Ok(err_packet) = err_packet {
 						if let Some(error_code_slice) = err_packet.failuremsg.get(0..2) {
 							_error_code_ret = Some(
-								u16::from_be_bytes(
-									error_code_slice.try_into().expect("len is 2"),
-								)
-								.into(),
+								u16::from_be_bytes(error_code_slice.try_into().expect("len is 2"))
+									.into(),
 							);
-							_error_packet_ret =
-								Some(err_packet.failuremsg[2..].to_vec());
+							_error_packet_ret = Some(err_packet.failuremsg[2..].to_vec());
 						}
 					}
 					res = Some(FailureLearnings {
@@ -1293,23 +1288,19 @@ fn process_onion_failure_inner<T: secp256k1::Signing, L: Logger>(
 					let mut hmac = HmacEngine::<Sha256>::new(&um);
 					hmac.input(&encrypted_packet.data[32..]);
 
-					if &Hmac::from_engine(hmac).to_byte_array()
-						== &encrypted_packet.data[..32]
-					{
+					if &Hmac::from_engine(hmac).to_byte_array() == &encrypted_packet.data[..32] {
 						#[cfg(not(test))]
 						{
-							_error_code_ret =
-								Some(LocalHTLCFailureReason::InvalidOnionBlinding);
+							_error_code_ret = Some(LocalHTLCFailureReason::InvalidOnionBlinding);
 							_error_packet_ret = Some(vec![0; 32]);
 						}
 						#[cfg(test)]
 						{
 							// Actually parse the onion error data in tests so we
 							// can check that blinded hops fail back correctly.
-							if let Ok(err_packet) =
-								msgs::DecodedOnionErrorPacket::read(
-									&mut Cursor::new(&encrypted_packet.data),
-								) {
+							if let Ok(err_packet) = msgs::DecodedOnionErrorPacket::read(
+								&mut Cursor::new(&encrypted_packet.data),
+							) {
 								_error_code_ret = Some(
 									u16::from_be_bytes(
 										err_packet
@@ -1321,8 +1312,7 @@ fn process_onion_failure_inner<T: secp256k1::Signing, L: Logger>(
 									)
 									.into(),
 								);
-								_error_packet_ret =
-									Some(err_packet.failuremsg[2..].to_vec());
+								_error_packet_ret = Some(err_packet.failuremsg[2..].to_vec());
 							} else {
 								_error_code_ret =
 									Some(LocalHTLCFailureReason::InvalidOnionBlinding);
@@ -2210,7 +2200,6 @@ impl HTLCFailReason {
 			HTLCFailReasonRepr::Reason { ref data, ref failure_reason } => {
 				// Final hop always reports zero hold time.
 				let hold_time: u32 = 0;
-
 				if let Some(secondary_shared_secret) = secondary_shared_secret {
 					// Phantom hop always reports zero hold time too.
 					let mut packet = build_failure_packet(

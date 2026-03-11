@@ -2917,11 +2917,6 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 	if let Some(failure) = payment_failure {
 		let alice_node_id = nodes[0].node.get_our_node_id();
 
-		eprintln!("DEBUG node pubkeys:");
-		for i in 0..6 {
-			eprintln!("  node {}: {}", i, nodes[i].node.get_our_node_id());
-		}
-
 		// Fred is a blinded introduction node recipient, so will fail back with fail htlc.
 		let updates_fred = get_htlc_update_msgs(&nodes[5], &eve_node_id);
 		assert_eq!(updates_fred.update_fail_htlcs.len(), 1);

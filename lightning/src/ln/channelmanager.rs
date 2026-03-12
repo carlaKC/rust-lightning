@@ -82,9 +82,7 @@ use crate::ln::onion_utils::{self};
 use crate::ln::onion_utils::{
 	decode_fulfill_attribution_data, HTLCFailReason, LocalHTLCFailureReason,
 };
-use crate::ln::onion_utils::{
-	process_fulfill_attribution_data, AttributionData, DecodedOnionFailure,
-};
+use crate::ln::onion_utils::{process_fulfill_attribution_data, AttributionData};
 use crate::ln::our_peer_storage::{EncryptedOurPeerStorage, PeerStorageMonitorHolder};
 #[cfg(test)]
 use crate::ln::outbound_payment;
@@ -9574,16 +9572,29 @@ impl<
 							&self.secp_ctx,
 							&WithContext::from(&self.logger, None, None, Some(*payment_hash)),
 						)
-						.map(|e| match e {
-							DecodedOnionFailure {
-								onion_error_code: Some(error_code),
-								onion_error_data: Some(error_data),
-								..
-							} if error_code.is_recipient_failure() => HTLCFailReason::reason(error_code, error_data),
-							_ => HTLCFailReason::reason(
-								LocalHTLCFailureReason::TemporaryTrampolineFailure,
-								Vec::new(),
-							),
+						.map(|decoded| {
+							if decoded.onion_error_code.is_some() {
+								// Error was decoded at the outer onion level, meaning it
+								// came from a non-trampoline intermediate node. Replace
+								// with TemporaryTrampolineFailure to avoid leaking info
+								// about the path between trampoline hops.
+								HTLCFailReason::reason(
+									LocalHTLCFailureReason::TemporaryTrampolineFailure,
+									Vec::new(),
+								)
+							} else if let Some(peeled_packet) = decoded.trampoline_peeled_packet {
+								// Error couldn't be decoded at the outer level, meaning
+								// it's already trampoline-encrypted from downstream. Pass
+								// it through so the original sender can decode it.
+								HTLCFailReason::from_onion_error_packet(peeled_packet)
+							} else {
+								// Couldn't peel outer layers (e.g., packet too short or
+								// fail_malformed_htlc). Replace with our own error.
+								HTLCFailReason::reason(
+									LocalHTLCFailureReason::TemporaryTrampolineFailure,
+									Vec::new(),
+								)
+							}
 						}),
 					None => Some(HTLCFailReason::reason(
 						LocalHTLCFailureReason::TemporaryTrampolineFailure,

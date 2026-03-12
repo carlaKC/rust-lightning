@@ -2771,7 +2771,7 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 	assert_eq!(blinded_tail.trampoline_hops.len(), 1);
 	assert_eq!(blinded_tail.hops.len(), 3);
 
-	let route = Route {
+	let mut route = Route {
 		paths: vec![Path {
 			hops: vec![
 				RouteHop {
@@ -2797,6 +2797,43 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 		}],
 		route_params: None,
 	};
+
+	// For unblinded tests, replace the blinded tail with an unblinded trampoline structure so
+	// that Alice's stored path has the correct trampoline shared secrets for error decoding.
+	// The replacement onion (constructed below) uses the same unblinded key derivation.
+	if !blinded {
+		let bt = route.paths[0].blinded_tail.as_ref().unwrap();
+		let blinding_point = bt.blinding_point;
+		let total_cltv = route.paths[0].hops.last().unwrap().cltv_expiry_delta;
+		let eve_cltv = eve_trampoline_relay.cltv_expiry_delta as u32;
+		let carol_cltv = total_cltv - eve_cltv;
+		route.paths[0].blinded_tail = Some(BlindedTail {
+			trampoline_hops: vec![
+				TrampolineHop {
+					pubkey: carol_node_id,
+					node_features: NodeFeatures::empty(),
+					fee_msat: 0,
+					cltv_expiry_delta: carol_cltv,
+				},
+				TrampolineHop {
+					pubkey: eve_node_id,
+					node_features: NodeFeatures::empty(),
+					fee_msat: 0,
+					cltv_expiry_delta: eve_cltv,
+				},
+				TrampolineHop {
+					pubkey: fred_node_id,
+					node_features: NodeFeatures::empty(),
+					fee_msat: 0,
+					cltv_expiry_delta: 0,
+				},
+			],
+			hops: vec![],
+			blinding_point,
+			excess_final_cltv_expiry_delta: 0,
+			final_value_msat: fred_recv_amt,
+		});
+	}
 
 	nodes[0]
 		.node
@@ -2879,6 +2916,11 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 
 	if let Some(failure) = payment_failure {
 		let alice_node_id = nodes[0].node.get_our_node_id();
+
+		eprintln!("DEBUG node pubkeys:");
+		for i in 0..6 {
+			eprintln!("  node {}: {}", i, nodes[i].node.get_our_node_id());
+		}
 
 		// Fred is a blinded introduction node recipient, so will fail back with fail htlc.
 		let updates_fred = get_htlc_update_msgs(&nodes[5], &eve_node_id);

@@ -14,7 +14,7 @@ use crate::blinded_path::payment::{
 use crate::blinded_path::utils::is_padded;
 use crate::blinded_path::{self, BlindedHop};
 use crate::events::{Event, HTLCHandlingFailureType, PaymentFailureReason};
-use crate::ln::channelmanager::{self, HTLCFailureMsg, PaymentId};
+use crate::ln::channelmanager::{self, HTLCFailureMsg, PaymentId, MPP_TIMEOUT_TICKS};
 use crate::ln::functional_test_utils::*;
 use crate::ln::inbound_payment::ExpandedKey;
 use crate::ln::msgs::{
@@ -33,7 +33,7 @@ use crate::routing::router::{
 };
 use crate::sign::{NodeSigner, PeerStorageKey, ReceiveAuthKey, Recipient};
 use crate::types::features::{BlindedHopFeatures, ChannelFeatures, NodeFeatures};
-use crate::types::payment::{PaymentHash, PaymentSecret};
+use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 use crate::util::config::{HTLCInterceptionFlags, UserConfig};
 use crate::util::ser::{WithoutLength, Writeable};
 use crate::util::test_utils::{self, bytes_from_hex, pubkey_from_hex, secret_from_hex};
@@ -2750,4 +2750,457 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 	} else {
 		claim_payment(&nodes[0], &[&nodes[1], &nodes[2]], payment_preimage);
 	}
+}
+
+/// Builds test infrastructure for trampoline MPP tests.
+///
+/// Topology:
+///   Alice (0) --> Bob (1) --> Carol (2, trampoline node)
+///   Alice (0) --> Barry (3) --> Carol (2, trampoline node)
+///
+/// Carol's inner trampoline onion is a forward to Eve (4) who is the final recipient, but we
+/// don't need Eve as a real node since forwarding isn't implemented yet -- we just need the
+/// onion to contain a valid forward payload.
+struct TrampolineMppTestContext<'a, 'b, 'c, 'd> {
+	nodes: &'d Vec<Node<'a, 'b, 'c>>,
+	payment_hash: PaymentHash,
+	_payment_preimage: PaymentPreimage,
+	payment_secret: PaymentSecret,
+	alice_bob_chan: ChannelId,
+	alice_barry_chan: ChannelId,
+	bob_carol_chan: ChannelId,
+	barry_carol_chan: ChannelId,
+	/// The amount sent along each MPP path.
+	per_path_amt: u64,
+}
+
+impl<'a, 'b, 'c, 'd> TrampolineMppTestContext<'a, 'b, 'c, 'd> {
+	fn new(nodes: &'d Vec<Node<'a, 'b, 'c>>) -> Self {
+		let alice_bob_chan =
+			create_announced_chan_between_nodes_with_value(nodes, 0, 1, 1_000_000, 0).2;
+		let bob_carol_chan =
+			create_announced_chan_between_nodes_with_value(nodes, 1, 2, 1_000_000, 0).2;
+		let alice_barry_chan =
+			create_announced_chan_between_nodes_with_value(nodes, 0, 3, 1_000_000, 0).2;
+		let barry_carol_chan =
+			create_announced_chan_between_nodes_with_value(nodes, 3, 2, 1_000_000, 0).2;
+
+		let per_path_amt = 500_000;
+		let total_amt = per_path_amt * 2;
+		let (payment_preimage, payment_hash, payment_secret) =
+			get_payment_preimage_hash(&nodes[2], Some(total_amt), None);
+
+		Self {
+			nodes,
+			payment_hash,
+			_payment_preimage: payment_preimage,
+			payment_secret,
+			alice_bob_chan,
+			alice_barry_chan,
+			bob_carol_chan,
+			barry_carol_chan,
+			per_path_amt,
+		}
+	}
+
+	fn total_amt(&self) -> u64 {
+		self.per_path_amt * 2
+	}
+
+	/// Sends both MPP parts from Alice. Returns the two message events, one for each path.
+	fn send_mpp_payment(&self) -> (MessageSendEvent, MessageSendEvent) {
+		let secp_ctx = Secp256k1::new();
+
+		let bob_node_id = self.nodes[1].node.get_our_node_id();
+		let carol_node_id = self.nodes[2].node.get_our_node_id();
+		let barry_node_id = self.nodes[3].node.get_our_node_id();
+
+		let alice_bob_scid = get_scid_from_channel_id(&self.nodes[0], self.alice_bob_chan);
+		let bob_carol_scid = get_scid_from_channel_id(&self.nodes[1], self.bob_carol_chan);
+		let alice_barry_scid = get_scid_from_channel_id(&self.nodes[0], self.alice_barry_chan);
+		let barry_carol_scid = get_scid_from_channel_id(&self.nodes[3], self.barry_carol_chan);
+
+		let trampoline_cltv = 42;
+		let excess_final_cltv = 70;
+
+		let create_forward_blinded_tail = |session_priv_bytes: [u8; 32]| -> BlindedTail {
+			let outer_session_priv = SecretKey::from_slice(&session_priv_bytes).unwrap();
+			let trampoline_session_priv =
+				onion_utils::compute_trampoline_session_priv(&outer_session_priv);
+			let carol_blinding_point =
+				PublicKey::from_secret_key(&secp_ctx, &trampoline_session_priv);
+
+			// Create Carol's blinded hop with a TrampolineForwardTlvs payload (forward to a
+			// fake next node). This makes the inner trampoline onion decode as a forward at
+			// Carol, putting it through the OnionPayload::Trampoline path.
+			let carol_forward_tlvs = blinded_path::payment::TrampolineForwardTlvs {
+				// Use a dummy next_trampoline since forwarding isn't implemented yet.
+				next_trampoline: PublicKey::from_slice(&[2; 33]).unwrap(),
+				payment_constraints: PaymentConstraints {
+					max_cltv_expiry: u32::max_value(),
+					htlc_minimum_msat: 1,
+				},
+				features: BlindedHopFeatures::empty(),
+				payment_relay: PaymentRelay {
+					cltv_expiry_delta: 36,
+					fee_proportional_millionths: 0,
+					fee_base_msat: 100,
+				},
+				next_blinding_override: None,
+			};
+
+			let carol_tlvs_encoded = carol_forward_tlvs.encode();
+			let path_data = [((carol_node_id, None), WithoutLength(&carol_tlvs_encoded))];
+			let carol_blinded_hops = blinded_path::utils::construct_blinded_hops(
+				&secp_ctx,
+				path_data.into_iter(),
+				&trampoline_session_priv,
+			);
+
+			// Add a dummy blinded hop after Carol so the onion builder sees this as a
+			// forward (not a final hop). The dummy hop won't be reached since forwarding
+			// isn't implemented.
+			let mut hops = carol_blinded_hops;
+			hops.push(BlindedHop {
+				blinded_node_id: PublicKey::from_slice(&[2; 33]).unwrap(),
+				encrypted_payload: vec![0; 32],
+			});
+
+			BlindedTail {
+				trampoline_hops: vec![TrampolineHop {
+					pubkey: carol_node_id,
+					node_features: Features::empty(),
+					fee_msat: self.per_path_amt,
+					cltv_expiry_delta: trampoline_cltv + excess_final_cltv,
+				}],
+				hops,
+				blinding_point: carol_blinding_point,
+				excess_final_cltv_expiry_delta: excess_final_cltv,
+				final_value_msat: self.per_path_amt,
+			}
+		};
+
+		let build_path_hops =
+			|first_hop_node_id, first_hop_scid, second_hop_scid| -> Vec<RouteHop> {
+				vec![
+					RouteHop {
+						pubkey: first_hop_node_id,
+						node_features: NodeFeatures::empty(),
+						short_channel_id: first_hop_scid,
+						channel_features: ChannelFeatures::empty(),
+						fee_msat: 1000,
+						cltv_expiry_delta: 48,
+						maybe_announced_channel: true,
+					},
+					RouteHop {
+						pubkey: carol_node_id,
+						node_features: NodeFeatures::empty(),
+						short_channel_id: second_hop_scid,
+						channel_features: ChannelFeatures::empty(),
+						fee_msat: 0,
+						cltv_expiry_delta: trampoline_cltv + excess_final_cltv,
+						maybe_announced_channel: true,
+					},
+				]
+			};
+
+		// Build route with placeholder blinded tails first to get session privs.
+		// We use [1u8; 32] as a placeholder - the tails will be rebuilt with real session privs.
+		let placeholder_tail = create_forward_blinded_tail([1u8; 32]);
+		let mut route = Route {
+			paths: vec![
+				Path {
+					hops: build_path_hops(bob_node_id, alice_bob_scid, bob_carol_scid),
+					blinded_tail: Some(placeholder_tail.clone()),
+				},
+				Path {
+					hops: build_path_hops(barry_node_id, alice_barry_scid, barry_carol_scid),
+					blinded_tail: Some(placeholder_tail),
+				},
+			],
+			route_params: None,
+		};
+
+		let cur_height = self.nodes[0].best_block_info().1 + 1;
+		let payment_id = PaymentId(self.payment_hash.0);
+		let onion = RecipientOnionFields::secret_only(self.payment_secret, self.total_amt());
+		let session_privs = self.nodes[0]
+			.node
+			.test_add_new_pending_payment(self.payment_hash, onion.clone(), payment_id, &route)
+			.unwrap();
+
+		// Rebuild blinded tails using the actual session privs so the trampoline onion's
+		// blinding point matches what the session priv derives.
+		route.paths[0].blinded_tail = Some(create_forward_blinded_tail(session_privs[0]));
+		route.paths[1].blinded_tail = Some(create_forward_blinded_tail(session_privs[1]));
+
+		// Send first path (Alice -> Bob -> Carol).
+		self.nodes[0]
+			.node
+			.test_send_payment_along_path(
+				&route.paths[0],
+				&self.payment_hash,
+				onion.clone(),
+				cur_height,
+				payment_id,
+				&None,
+				session_privs[0],
+			)
+			.unwrap();
+		check_added_monitors(&self.nodes[0], 1);
+
+		// Send second path (Alice -> Barry -> Carol).
+		self.nodes[0]
+			.node
+			.test_send_payment_along_path(
+				&route.paths[1],
+				&self.payment_hash,
+				onion,
+				cur_height,
+				payment_id,
+				&None,
+				session_privs[1],
+			)
+			.unwrap();
+		check_added_monitors(&self.nodes[0], 1);
+
+		let mut events = self.nodes[0].node.get_and_clear_pending_msg_events();
+		assert_eq!(events.len(), 2);
+		let ev_bob = remove_first_msg_event_to_node(&bob_node_id, &mut events);
+		let ev_barry = remove_first_msg_event_to_node(&barry_node_id, &mut events);
+		(ev_bob, ev_barry)
+	}
+}
+
+/// Controls how the trampoline MPP timeout is triggered in `do_trampoline_mpp_timeout_test`.
+enum TrampolineMppTimeoutAction {
+	/// Send both MPP parts (MPP completes). Tick timers afterwards to verify no spurious timeout.
+	None,
+	/// Send only one MPP part, then tick timers until MPP timeout fires.
+	Ticks,
+	/// Send only one MPP part, then mine blocks until on-chain CLTV timeout fires.
+	OnChain,
+}
+
+fn do_trampoline_mpp_timeout_test(timeout_action: TrampolineMppTimeoutAction) {
+	let chanmon_cfgs = create_chanmon_cfgs(4);
+	let node_cfgs = create_node_cfgs(4, &chanmon_cfgs);
+	let node_chanmgrs = create_node_chanmgrs(4, &node_cfgs, &vec![None; 4]);
+	let nodes = create_network(4, &node_cfgs, &node_chanmgrs);
+
+	let ctx = TrampolineMppTestContext::new(&nodes);
+	let (ev_bob, ev_barry) = ctx.send_mpp_payment();
+
+	let bob_node_id = nodes[1].node.get_our_node_id();
+	let carol_node_id = nodes[2].node.get_our_node_id();
+	let barry_node_id = nodes[3].node.get_our_node_id();
+
+	let send_both_parts = matches!(timeout_action, TrampolineMppTimeoutAction::None);
+
+	// Pass first part along Alice -> Bob -> Carol.
+	let path_1: &[&Node] = &[&nodes[1], &nodes[2]];
+	let args =
+		PassAlongPathArgs::new(&nodes[0], path_1, ctx.per_path_amt, ctx.payment_hash, ev_bob)
+			.without_claimable_event();
+	do_pass_along_path(args);
+
+	if send_both_parts {
+		// Pass second part along Alice -> Barry -> Carol. MPP completes, trampoline logic runs.
+		// handle_trampoline_htlc will currently reject with TemporaryTrampolineFailure.
+		// We can't use do_pass_along_path with expect_failure because the trampoline fail-back
+		// touches 2 channels (one per MPP part), but expect_failure hardcodes
+		// check_added_monitors(1).
+		let path_2: &[&Node] = &[&nodes[3], &nodes[2]];
+		let args =
+			PassAlongPathArgs::new(&nodes[0], path_2, ctx.per_path_amt, ctx.payment_hash, ev_barry)
+				.without_clearing_recipient_events();
+		do_pass_along_path(args);
+
+		// Carol should have an HTLCHandlingFailed event for the trampoline forward.
+		let events = nodes[2].node.get_and_clear_pending_events();
+		assert_eq!(events.len(), 1);
+		match &events[0] {
+			Event::HTLCHandlingFailed { failure_type, .. } => {
+				assert_eq!(*failure_type, HTLCHandlingFailureType::TrampolineForward {});
+			},
+			_ => panic!("Expected HTLCHandlingFailed, got {:?}", events[0]),
+		}
+
+		// Process the fail-backs. Carol fails both MPP parts back through their respective
+		// channels.
+		nodes[2].node.process_pending_htlc_forwards();
+		check_added_monitors(&nodes[2], 2);
+
+		// Carol fails both MPP parts back simultaneously (one per incoming channel).
+		let mut carol_events = nodes[2].node.get_and_clear_pending_msg_events();
+		assert_eq!(carol_events.len(), 2);
+		let carol_bob_ev = remove_first_msg_event_to_node(&bob_node_id, &mut carol_events);
+		let carol_barry_ev = remove_first_msg_event_to_node(&barry_node_id, &mut carol_events);
+
+		// Fail back along Bob path: Carol -> Bob -> Alice
+		let carol_bob_updates = match carol_bob_ev {
+			MessageSendEvent::UpdateHTLCs { ref updates, .. } => updates.clone(),
+			_ => panic!("Expected UpdateHTLCs"),
+		};
+		assert_eq!(carol_bob_updates.update_fail_htlcs.len(), 1);
+		nodes[1]
+			.node
+			.handle_update_fail_htlc(carol_node_id, &carol_bob_updates.update_fail_htlcs[0]);
+		do_commitment_signed_dance(
+			&nodes[1],
+			&nodes[2],
+			&carol_bob_updates.commitment_signed,
+			true,
+			false,
+		);
+
+		// Fail back along Barry path: Carol -> Barry -> Alice
+		let carol_barry_updates = match carol_barry_ev {
+			MessageSendEvent::UpdateHTLCs { ref updates, .. } => updates.clone(),
+			_ => panic!("Expected UpdateHTLCs"),
+		};
+		assert_eq!(carol_barry_updates.update_fail_htlcs.len(), 1);
+		nodes[3]
+			.node
+			.handle_update_fail_htlc(carol_node_id, &carol_barry_updates.update_fail_htlcs[0]);
+		do_commitment_signed_dance(
+			&nodes[3],
+			&nodes[2],
+			&carol_barry_updates.commitment_signed,
+			true,
+			false,
+		);
+
+		// Tick timers well past MPP_TIMEOUT_TICKS. No additional timeout should fire because the
+		// MPP set was already dispatched (and removed from awaiting_trampoline_forwards).
+		for _ in 0..(MPP_TIMEOUT_TICKS * 3) {
+			nodes[2].node.timer_tick_occurred();
+		}
+		assert!(nodes[2].node.get_and_clear_pending_events().is_empty());
+
+		// Bob and Barry already processed the failure. Get the UpdateHTLCs they generated for
+		// Alice.
+		let bob_alice_updates = get_htlc_update_msgs(&nodes[1], &nodes[0].node.get_our_node_id());
+		nodes[0].node.handle_update_fail_htlc(bob_node_id, &bob_alice_updates.update_fail_htlcs[0]);
+		do_commitment_signed_dance(
+			&nodes[0],
+			&nodes[1],
+			&bob_alice_updates.commitment_signed,
+			false,
+			false,
+		);
+
+		let barry_alice_updates = get_htlc_update_msgs(&nodes[3], &nodes[0].node.get_our_node_id());
+		nodes[0]
+			.node
+			.handle_update_fail_htlc(barry_node_id, &barry_alice_updates.update_fail_htlcs[0]);
+		do_commitment_signed_dance(
+			&nodes[0],
+			&nodes[3],
+			&barry_alice_updates.commitment_signed,
+			false,
+			false,
+		);
+
+		// Alice sees both paths fail (2 PaymentPathFailed + 1 PaymentFailed).
+		let events = nodes[0].node.get_and_clear_pending_events();
+		assert_eq!(events.len(), 3);
+		for ev in &events[..2] {
+			match ev {
+				Event::PaymentPathFailed { payment_hash, payment_failed_permanently, .. } => {
+					assert_eq!(*payment_hash, ctx.payment_hash);
+					assert!(!payment_failed_permanently);
+				},
+				_ => panic!("Expected PaymentPathFailed, got {:?}", ev),
+			}
+		}
+		match &events[2] {
+			Event::PaymentFailed { payment_hash, .. } => {
+				assert_eq!(*payment_hash, Some(ctx.payment_hash));
+			},
+			_ => panic!("Expected PaymentFailed, got {:?}", events[2]),
+		}
+	} else {
+		// Only one part was sent. Trigger timeout based on action.
+		match timeout_action {
+			TrampolineMppTimeoutAction::Ticks => {
+				for _ in 0..MPP_TIMEOUT_TICKS {
+					nodes[2].node.timer_tick_occurred();
+				}
+			},
+			TrampolineMppTimeoutAction::OnChain => {
+				// Mine blocks until the HTLC approaches CLTV expiry. The on-chain timeout fires
+				// when height >= cltv_expiry - HTLC_FAIL_BACK_BUFFER. The HTLC's cltv_expiry at
+				// Carol is approximately starting_height + total_cltv_delta. We advance enough
+				// blocks to trigger it.
+				let current_height = nodes[2].best_block_info().1;
+				connect_blocks(&nodes[2], 200 - current_height);
+			},
+			TrampolineMppTimeoutAction::None => unreachable!(),
+		}
+
+		// Carol should fail the HTLC back due to timeout.
+		let fail = HTLCHandlingFailureType::TrampolineForward {};
+		expect_and_process_pending_htlcs_and_htlc_handling_failed(&nodes[2], &[fail]);
+
+		// Carol fails the HTLC back to Bob.
+		let carol_bob_updates = get_htlc_update_msgs(&nodes[2], &bob_node_id);
+		assert_eq!(carol_bob_updates.update_fail_htlcs.len(), 1);
+		nodes[1]
+			.node
+			.handle_update_fail_htlc(carol_node_id, &carol_bob_updates.update_fail_htlcs[0]);
+		check_added_monitors(&nodes[2], 1);
+		do_commitment_signed_dance(
+			&nodes[1],
+			&nodes[2],
+			&carol_bob_updates.commitment_signed,
+			true,
+			false,
+		);
+
+		// Bob already processed the failure. Get the UpdateHTLCs to Alice.
+		let bob_alice_updates = get_htlc_update_msgs(&nodes[1], &nodes[0].node.get_our_node_id());
+		nodes[0].node.handle_update_fail_htlc(bob_node_id, &bob_alice_updates.update_fail_htlcs[0]);
+		do_commitment_signed_dance(
+			&nodes[0],
+			&nodes[1],
+			&bob_alice_updates.commitment_signed,
+			false,
+			false,
+		);
+
+		// Alice sees the path failure.
+		let events = nodes[0].node.get_and_clear_pending_events();
+		assert_eq!(events.len(), 1);
+		match &events[0] {
+			Event::PaymentPathFailed { payment_hash, payment_failed_permanently, .. } => {
+				assert_eq!(*payment_hash, ctx.payment_hash);
+				assert!(!payment_failed_permanently);
+			},
+			_ => panic!("Expected PaymentPathFailed, got {:?}", events[0]),
+		}
+	}
+}
+
+#[test]
+fn test_trampoline_mpp_receive_success() {
+	// Test that two MPP parts arriving at a trampoline node are correctly accumulated.
+	// Since trampoline forwarding isn't implemented yet, the completed MPP will fail with
+	// TemporaryTrampolineFailure, confirming accumulation worked. Also verifies that no
+	// spurious timeout fires after the MPP set is dispatched.
+	do_trampoline_mpp_timeout_test(TrampolineMppTimeoutAction::None);
+}
+
+#[test]
+fn test_trampoline_mpp_timeout_partial() {
+	// Test that a partial trampoline MPP (only one of two parts arrives) times out correctly
+	// via timer ticks.
+	do_trampoline_mpp_timeout_test(TrampolineMppTimeoutAction::Ticks);
+}
+
+#[test]
+fn test_trampoline_mpp_onchain_timeout() {
+	// Test that trampoline MPP HTLCs are failed back when they approach on-chain CLTV expiry,
+	// even if the MPP is still incomplete.
+	do_trampoline_mpp_timeout_test(TrampolineMppTimeoutAction::OnChain);
 }

@@ -8,8 +8,9 @@
 // licenses.
 
 use crate::blinded_path::payment::{
-	BlindedPaymentPath, Bolt12RefundContext, DummyTlvs, ForwardTlvs, PaymentConstraints,
-	PaymentContext, PaymentForwardNode, PaymentRelay, ReceiveTlvs, PAYMENT_PADDING_ROUND_OFF,
+	BlindedPaymentPath, Bolt12RefundContext, DummyTlvs, ForwardNode, ForwardTlvs,
+	PaymentConstraints, PaymentContext, PaymentForwardNode, PaymentRelay, ReceiveTlvs,
+	PAYMENT_PADDING_ROUND_OFF,
 };
 use crate::blinded_path::utils::is_padded;
 use crate::blinded_path::{self, BlindedHop};
@@ -31,7 +32,7 @@ use crate::prelude::*;
 use crate::routing::router::{
 	BlindedTail, Path, Payee, PaymentParameters, Route, RouteHop, RouteParameters, TrampolineHop,
 };
-use crate::sign::{NodeSigner, PeerStorageKey, ReceiveAuthKey, Recipient};
+use crate::sign::{EntropySource, NodeSigner, PeerStorageKey, ReceiveAuthKey, Recipient};
 use crate::types::features::{BlindedHopFeatures, ChannelFeatures, NodeFeatures};
 use crate::types::payment::{PaymentHash, PaymentSecret};
 use crate::util::config::{HTLCInterceptionFlags, UserConfig};
@@ -2420,45 +2421,28 @@ fn test_trampoline_blinded_receive() {
 	do_test_trampoline_relay(true, TrampolineTestCase::OuterCLTVLessThanTrampoline);
 }
 
-/// Creates a blinded tail where Carol receives via a blinded path.
-fn create_blinded_tail(
-	secp_ctx: &Secp256k1<All>, override_random_bytes: [u8; 32], carol_node_id: PublicKey,
-	carol_auth_key: ReceiveAuthKey, trampoline_cltv_expiry_delta: u32,
-	excess_final_cltv_delta: u32, final_value_msat: u64, payment_secret: PaymentSecret,
+fn create_trampoline_forward_blinded_tail<ES: EntropySource>(
+	secp_ctx: &Secp256k1<All>, entropy_source: ES,
+	intermediate_nodes: &[ForwardNode<blinded_path::payment::TrampolineForwardTlvs>],
+	payee_node_id: PublicKey, payee_receive_key: ReceiveAuthKey, payee_tlvs: ReceiveTlvs,
+	trampoline_hops: Vec<TrampolineHop>, excess_final_cltv_delta: u32, final_value_msat: u64,
 ) -> BlindedTail {
-	let outer_session_priv = SecretKey::from_slice(&override_random_bytes).unwrap();
-	let trampoline_session_priv = onion_utils::compute_trampoline_session_priv(&outer_session_priv);
-
-	let carol_blinding_point = PublicKey::from_secret_key(&secp_ctx, &trampoline_session_priv);
-	let carol_blinded_hops = {
-		let payee_tlvs = ReceiveTlvs {
-			payment_secret,
-			payment_constraints: PaymentConstraints {
-				max_cltv_expiry: u32::max_value(),
-				htlc_minimum_msat: final_value_msat,
-			},
-			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
-		}
-		.encode();
-
-		let path = [((carol_node_id, Some(carol_auth_key)), WithoutLength(&payee_tlvs))];
-
-		blinded_path::utils::construct_blinded_hops(
-			&secp_ctx,
-			path.into_iter(),
-			&trampoline_session_priv,
-		)
-	};
+	let blinded_path = BlindedPaymentPath::new_for_trampoline(
+		intermediate_nodes,
+		payee_node_id,
+		payee_receive_key,
+		payee_tlvs,
+		u64::max_value(),
+		0,
+		entropy_source,
+		secp_ctx,
+	)
+	.unwrap();
 
 	BlindedTail {
-		trampoline_hops: vec![TrampolineHop {
-			pubkey: carol_node_id,
-			node_features: Features::empty(),
-			fee_msat: final_value_msat,
-			cltv_expiry_delta: trampoline_cltv_expiry_delta + excess_final_cltv_delta,
-		}],
-		hops: carol_blinded_hops,
-		blinding_point: carol_blinding_point,
+		trampoline_hops,
+		hops: blinded_path.blinded_hops().to_vec(),
+		blinding_point: blinded_path.blinding_point(),
 		excess_final_cltv_expiry_delta: excess_final_cltv_delta,
 		final_value_msat,
 	}
@@ -2631,15 +2615,28 @@ fn do_test_trampoline_relay(blinded: bool, test_case: TrampolineTestCase) {
 			// Create a blinded tail where Carol is receiving. In our unblinded test cases, we'll
 			// override this anyway (with a tail sending to an unblinded receive, which LDK doesn't
 			// allow).
-			blinded_tail: Some(create_blinded_tail(
+			blinded_tail: Some(create_trampoline_forward_blinded_tail(
 				&secp_ctx,
-				override_random_bytes,
+				&nodes[2].keys_manager,
+				&[],
 				carol_node_id,
 				nodes[2].keys_manager.get_receive_auth_key(),
-				original_trampoline_cltv,
+				ReceiveTlvs {
+					payment_secret,
+					payment_constraints: PaymentConstraints {
+						max_cltv_expiry: u32::max_value(),
+						htlc_minimum_msat: original_amt_msat,
+					},
+					payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+				},
+				vec![TrampolineHop {
+					pubkey: carol_node_id,
+					node_features: Features::empty(),
+					fee_msat: original_amt_msat,
+					cltv_expiry_delta: original_trampoline_cltv + excess_final_cltv,
+				}],
 				excess_final_cltv,
 				original_amt_msat,
-				payment_secret,
 			)),
 		}],
 		route_params: None,

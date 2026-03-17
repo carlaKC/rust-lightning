@@ -2184,6 +2184,10 @@ impl HTLCFailReason {
 		})
 	}
 
+	pub(super) fn from_onion_error_packet(packet: OnionErrorPacket) -> Self {
+		Self(HTLCFailReasonRepr::LightningError { err: packet, hold_time: None })
+	}
+
 	/// Encrypted a failure packet using a shared secret.
 	///
 	/// For phantom nodes or inner Trampoline onions, a secondary_shared_secret can be passed, which

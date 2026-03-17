@@ -89,7 +89,7 @@ use crate::ln::outbound_payment;
 #[cfg(any(test, feature = "_externalize_tests"))]
 use crate::ln::outbound_payment::PaymentSendFailure;
 use crate::ln::outbound_payment::{
-	Bolt11PaymentError, Bolt12PaymentError, NextTrampolineHopInfo, OutboundPayments,
+	Bolt11PaymentError, Bolt12PaymentError, OutboundPayments,
 	PendingOutboundPayment, ProbeSendFailure, RecipientCustomTlvs, RecipientOnionFields, Retry,
 	RetryableInvoiceRequest, RetryableSendFailure, SendAlongPathArgs, StaleExpiration,
 };
@@ -533,8 +533,6 @@ enum OnionPayload {
 	},
 	/// Contains the payer-provided preimage.
 	Spontaneous(PaymentPreimage),
-	/// Indicates that the incoming onion payload is for a trampoline forward.
-	Trampoline { next_hop_info: NextTrampolineHopInfo, next_trampoline: PublicKey },
 }
 
 trait HasMppPart {
@@ -1346,6 +1344,12 @@ impl ClaimablePayment {
 	fn total_counterparty_skimmed_msat(&self) -> u64 {
 		self.htlcs.iter().map(|htlc| htlc.counterparty_skimmed_fee_msat.unwrap_or(0)).sum()
 	}
+}
+
+/// Tracks trampoline HTLCs being accumulated before forwarding.
+struct TrampolinePayment {
+	onion_fields: RecipientOnionFields,
+	htlcs: Vec<MppPart>,
 }
 
 /// Increments MPP timeout tick for all HTLCs and returns a boolean indicating whether the HTLC
@@ -2941,6 +2945,10 @@ pub struct ChannelManager<
 	/// [`ClaimablePayments`]' individual field docs for more info.
 	claimable_payments: Mutex<ClaimablePayments>,
 
+	/// The sets of trampoline payments which are in the process of being accumulated on inbound
+	/// channel(s).
+	awaiting_trampoline_forwards: Mutex<HashMap<PaymentHash, TrampolinePayment>>,
+
 	/// The set of outbound SCID aliases across all our channels, including unconfirmed channels
 	/// and some closed channels which reached a usable state prior to being closed. This is used
 	/// only to avoid duplicates, and is not persisted explicitly to disk, but rebuilt from the
@@ -3733,6 +3741,7 @@ impl<
 			forward_htlcs: Mutex::new(new_hash_map()),
 			decode_update_add_htlcs: Mutex::new(new_hash_map()),
 			claimable_payments: Mutex::new(ClaimablePayments { claimable_payments: new_hash_map(), pending_claiming_payments: new_hash_map() }),
+			awaiting_trampoline_forwards: Mutex::new(new_hash_map()),
 			pending_intercepted_htlcs: Mutex::new(new_hash_map()),
 			short_to_chan_info: FairRwLock::new(new_hash_map()),
 
@@ -8763,10 +8772,7 @@ impl<
 								fail_receive_htlc!(committed_to_claimable);
 							}
 						},
-						OnionPayload::Trampoline { .. } => {
-							todo!();
-						},
-					}
+						}
 				},
 				HTLCForwardInfo::FailHTLC { .. } | HTLCForwardInfo::FailMalformedHTLC { .. } => {
 					panic!("Got pending fail of our own HTLC");
@@ -9092,6 +9098,25 @@ impl<
 					true
 				},
 			);
+
+			self.awaiting_trampoline_forwards.lock().unwrap().retain(|payment_hash, payment| {
+				if payment.htlcs.is_empty() {
+					debug_assert!(false);
+					return false;
+				}
+				let mpp_timeout = check_mpp_timeout(&mut payment.htlcs, &payment.onion_fields);
+				if mpp_timeout {
+					let previous_hop_data =
+						payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
+
+					timed_out_mpp_htlcs.push((
+						HTLCSource::TrampolineForward { previous_hop_data, outbound_payment: None },
+						*payment_hash,
+						HTLCHandlingFailureType::TrampolineForward {},
+					));
+				}
+				!mpp_timeout
+			});
 
 			for (htlc_source, payment_hash, failure_type) in timed_out_mpp_htlcs.drain(..) {
 				let failure_reason = LocalHTLCFailureReason::MPPTimeout;
@@ -16424,6 +16449,33 @@ impl<
 				},
 			);
 
+			self.awaiting_trampoline_forwards.lock().unwrap().retain(|payment_hash, payment| {
+				if payment.htlcs.is_empty() {
+					debug_assert!(false);
+					return false;
+				}
+				let htlc_timed_out = payment
+					.htlcs
+					.iter()
+					.any(|htlc| htlc.check_onchain_timeout(height, HTLC_FAIL_BACK_BUFFER));
+				if htlc_timed_out {
+					let previous_hop_data =
+						payment.htlcs.drain(..).map(|claimable| claimable.prev_hop).collect();
+
+					let failure_reason = LocalHTLCFailureReason::CLTVExpiryTooSoon;
+					timed_out_htlcs.push((
+						HTLCSource::TrampolineForward { previous_hop_data, outbound_payment: None },
+						*payment_hash,
+						HTLCFailReason::reason(
+							failure_reason,
+							self.get_htlc_inbound_temp_fail_data(failure_reason),
+						),
+						HTLCHandlingFailureType::TrampolineForward {},
+					));
+				}
+				!htlc_timed_out
+			});
+
 			let mut intercepted_htlcs = self.pending_intercepted_htlcs.lock().unwrap();
 			intercepted_htlcs.retain(|_, htlc| {
 				if height >= htlc.forward_info.outgoing_cltv_value - HTLC_FAIL_BACK_BUFFER {
@@ -17889,14 +17941,9 @@ impl_writeable_tlv_based!(HTLCPreviousHopData, {
 fn write_claimable_htlc<W: Writer>(
 	htlc: &ClaimableHTLC, total_mpp_value_msat: u64, writer: &mut W,
 ) -> Result<(), io::Error> {
-	let (payment_data, keysend_preimage, trampoline_next_hop, trampoline_next_node) = match &htlc
-		.onion_payload
-	{
-		OnionPayload::Invoice { _legacy_hop_data } => (_legacy_hop_data.as_ref(), None, None, None),
-		OnionPayload::Spontaneous(preimage) => (None, Some(preimage), None, None),
-		OnionPayload::Trampoline { next_hop_info, next_trampoline } => {
-			(None, None, Some(next_hop_info), Some(next_trampoline))
-		},
+	let (payment_data, keysend_preimage) = match &htlc.onion_payload {
+		OnionPayload::Invoice { _legacy_hop_data } => (_legacy_hop_data.as_ref(), None),
+		OnionPayload::Spontaneous(preimage) => (None, Some(preimage)),
 	};
 	write_tlv_fields!(writer, {
 		(0, htlc.mpp_part.prev_hop, required),
@@ -17908,8 +17955,6 @@ fn write_claimable_htlc<W: Writer>(
 		(6, htlc.mpp_part.cltv_expiry, required),
 		(8, keysend_preimage, option),
 		(10, htlc.counterparty_skimmed_fee_msat, option),
-		(12, trampoline_next_hop, option),
-		(14, trampoline_next_node, option)
 	});
 	Ok(())
 }
@@ -17927,26 +17972,17 @@ impl Readable for (ClaimableHTLC, u64) {
 			(6, cltv_expiry, required),
 			(8, keysend_preimage, option),
 			(10, counterparty_skimmed_fee_msat, option),
-			(12, trampoline_next_hop, option),
-			(14, trampoline_next_node, option)
 		});
 		let payment_data: Option<msgs::FinalOnionHopData> = payment_data_opt;
 		let value = value_ser.0.unwrap();
-		let onion_payload = match (keysend_preimage, trampoline_next_hop, trampoline_next_node) {
-			(Some(p), None, None) => {
+		let onion_payload = match keysend_preimage {
+			Some(p) => {
 				if payment_data.is_some() {
 					return Err(DecodeError::InvalidValue)
 				}
 				OnionPayload::Spontaneous(p)
 			},
-			(None, None, None) => OnionPayload::Invoice { _legacy_hop_data: payment_data },
-			(None, Some(next_hop_info), Some(next_trampoline)) => {
-				OnionPayload::Trampoline {
-				next_hop_info,
-				next_trampoline,
-				}
-			},
-			_ => return Err(DecodeError::InvalidValue),
+			None => OnionPayload::Invoice { _legacy_hop_data: payment_data },
 		};
 		Ok((ClaimableHTLC {
 			mpp_part: MppPart {
@@ -20356,6 +20392,7 @@ impl<
 				claimable_payments,
 				pending_claiming_payments,
 			}),
+			awaiting_trampoline_forwards: Mutex::new(new_hash_map()),
 			outbound_scid_aliases: Mutex::new(outbound_scid_aliases),
 			short_to_chan_info: FairRwLock::new(short_to_chan_info),
 			fake_scid_rand_bytes: fake_scid_rand_bytes.unwrap(),

@@ -308,13 +308,7 @@ macro_rules! _check_decoded_tlv_order {
 		}
 	}};
 	($last_seen_type: expr, $typ: expr, $type: expr, $field: ident, (default_value_vec, $default: expr)) => {{
-		// Note that $type may be 0 making the second comparison always false
-		#[allow(unused_comparisons)]
-		let invalid_order =
-			($last_seen_type.is_none() || $last_seen_type.unwrap() < $type) && $typ.0 > $type;
-		if invalid_order {
-			$field = Some($default);
-		}
+		$crate::_check_decoded_tlv_order!($last_seen_type, $typ, $type, $field, (default_value, $default));
 	}};
 	($last_seen_type: expr, $typ: expr, $type: expr, $field: ident, (static_value, $value: expr)) => {};
 	($last_seen_type: expr, $typ: expr, $type: expr, $field: ident, required) => {{
@@ -388,12 +382,7 @@ macro_rules! _check_missing_tlv {
 		}
 	}};
 	($last_seen_type: expr, $type: expr, $field: ident, (default_value_vec, $default: expr)) => {{
-		// Note that $type may be 0 making the second comparison always false
-		#[allow(unused_comparisons)]
-		let missing_req_type = $last_seen_type.is_none() || $last_seen_type.unwrap() < $type;
-		if missing_req_type {
-			$field = Some($default);
-		}
+		$crate::_check_missing_tlv!($last_seen_type, $type, $field, (default_value, $default));
 	}};
 	($last_seen_type: expr, $type: expr, $field: expr, (static_value, $value: expr)) => {
 		$field = $value;
@@ -465,7 +454,7 @@ macro_rules! _decode_tlv {
 	}};
 	($outer_reader: expr, $reader: expr, $field: ident, (default_value_vec, $default: expr)) => {{
 		let f: $crate::util::ser::WithoutLength<Vec<_>> = $crate::util::ser::LengthReadable::read_from_fixed_length_buffer(&mut $reader)?;
-		$field = Some(f.0);
+		$field = $crate::util::ser::RequiredWrapper(Some(f.0));
 	}};
 	($outer_reader: expr, $reader: expr, $field: ident, (static_value, $value: expr)) => {{
 	}};
@@ -882,7 +871,7 @@ macro_rules! _init_tlv_based_struct_field {
 		$field.0.unwrap()
 	};
 	($field: ident, (default_value_vec, $default: expr)) => {
-		$field.unwrap()
+		$crate::_init_tlv_based_struct_field!($field, (default_value, $default))
 	};
 	($field: ident, (static_value, $value: expr)) => {
 		$field
@@ -936,7 +925,7 @@ macro_rules! _init_tlv_field_var {
 		let mut $field = $crate::util::ser::RequiredWrapper(None);
 	};
 	($field: ident, (default_value_vec, $default: expr)) => {
-		let mut $field: Option<Vec<_>> = None;
+		$crate::_init_tlv_field_var!($field, (default_value, $default));
 	};
 	($field: ident, (static_value, $value: expr)) => {
 		let $field;

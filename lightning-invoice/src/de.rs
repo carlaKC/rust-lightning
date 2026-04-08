@@ -584,6 +584,13 @@ impl FromBase32 for TaggedField {
 			constants::TAG_FEATURES => {
 				Ok(TaggedField::Features(Bolt11InvoiceFeatures::from_base32(field_data)?))
 			},
+			constants::TAG_ACCOUNTABLE => {
+				if field_data.is_empty() {
+					Ok(TaggedField::Accountable)
+				} else {
+					Err(Bolt11ParseError::Skip)
+				}
+			},
 			_ => {
 				// "A reader MUST skip over unknown fields"
 				Err(Bolt11ParseError::Skip)

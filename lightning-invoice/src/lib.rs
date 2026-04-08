@@ -532,6 +532,7 @@ pub enum TaggedField {
 	PaymentSecret(PaymentSecret),
 	PaymentMetadata(Vec<u8>),
 	Features(Bolt11InvoiceFeatures),
+	Accountable,
 }
 
 /// SHA-256 hash
@@ -617,6 +618,7 @@ pub mod constants {
 	pub const TAG_PAYMENT_SECRET: u8 = 16;
 	pub const TAG_PAYMENT_METADATA: u8 = 27;
 	pub const TAG_FEATURES: u8 = 5;
+	pub const TAG_ACCOUNTABLE: u8 = 31;
 }
 
 impl InvoiceBuilder<tb::False, tb::False, tb::False, tb::False, tb::False, tb::False> {
@@ -931,6 +933,13 @@ impl<D: tb::Bool, H: tb::Bool, T: tb::Bool, C: tb::Bool, M: tb::Bool>
 		}
 		self
 	}
+
+	/// Includes the `accountable` marker field, indicating the recipient will resolve
+	/// the payment within 90 seconds of HTLC arrival.
+	pub fn accountable(mut self) -> Self {
+		self.tagged_fields.push(TaggedField::Accountable);
+		self
+	}
 }
 
 impl<M: tb::Bool> InvoiceBuilder<tb::True, tb::True, tb::True, tb::True, tb::True, M> {
@@ -1192,6 +1201,12 @@ impl RawBolt11Invoice {
 
 	pub fn features(&self) -> Option<&Bolt11InvoiceFeatures> {
 		find_extract!(self.known_tagged_fields(), TaggedField::Features(ref x), x)
+	}
+
+	/// Returns whether the invoice includes the accountable marker field, indicating
+	/// the recipient will resolve the payment within 90 seconds of HTLC arrival.
+	pub fn accountable(&self) -> bool {
+		self.known_tagged_fields().any(|field| matches!(field, TaggedField::Accountable))
 	}
 
 	/// This is not exported to bindings users as we don't support Vec<&NonOpaqueType>
@@ -1496,6 +1511,12 @@ impl Bolt11Invoice {
 		self.signed_invoice.features()
 	}
 
+	/// Returns whether the invoice includes the accountable marker field, indicating
+	/// the recipient will resolve the payment within 90 seconds of HTLC arrival.
+	pub fn accountable(&self) -> bool {
+		self.signed_invoice.accountable()
+	}
+
 	/// Recover the payee's public key (only to be used if none was included in the invoice)
 	pub fn recover_payee_pub_key(&self) -> PublicKey {
 		self.signed_invoice.recover_payee_pub_key().expect("was checked by constructor").0
@@ -1663,6 +1684,7 @@ impl TaggedField {
 			TaggedField::PaymentSecret(_) => constants::TAG_PAYMENT_SECRET,
 			TaggedField::PaymentMetadata(_) => constants::TAG_PAYMENT_METADATA,
 			TaggedField::Features(_) => constants::TAG_FEATURES,
+			TaggedField::Accountable => constants::TAG_ACCOUNTABLE,
 		};
 
 		Fe32::try_from(tag).expect("all tags defined are <32")

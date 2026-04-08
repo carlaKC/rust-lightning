@@ -435,7 +435,7 @@ impl Base32Iterable for TaggedField {
 			.chain(payload.fe_iter())
 		}
 
-		define_iterator_enum!(ManyIters, A, B, C, D, E, F, G, H, I, J, K);
+		define_iterator_enum!(ManyIters, A, B, C, D, E, F, G, H, I, J, K, L);
 		match *self {
 			TaggedField::PaymentHash(ref hash) => {
 				ManyIters::A(write_tagged_field(constants::TAG_PAYMENT_HASH, hash))
@@ -469,6 +469,10 @@ impl Base32Iterable for TaggedField {
 			},
 			TaggedField::Features(ref features) => {
 				ManyIters::K(write_tagged_field(constants::TAG_FEATURES, features))
+			},
+			TaggedField::Accountable => {
+				// Marker field with data_length 0.
+				ManyIters::L(write_tagged_field(constants::TAG_ACCOUNTABLE, &[0u8; 0]))
 			},
 		}
 	}

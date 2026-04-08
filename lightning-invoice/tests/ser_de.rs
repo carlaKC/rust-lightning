@@ -573,3 +573,59 @@ fn test_bolt_invalid_invoices() {
 		"lnbc2500000001p1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpusp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9qrsgq0lzc236j96a95uv0m3umg28gclm5lqxtqqwk32uuk4k6673k6n5kfvx3d2h8s295fad45fdhmusm8sjudfhlf6dcsxmfvkeywmjdkxcp99202x"
 		), Err(ParseOrSemanticError::SemanticError(Bolt11SemanticError::ImpreciseAmount)));
 }
+
+#[test]
+fn test_accountable_field_roundtrip() {
+	// Build an invoice with the accountable marker field and verify it roundtrips.
+	let invoice = InvoiceBuilder::new(Currency::Bitcoin)
+		.duration_since_epoch(Duration::from_secs(1496314658))
+		.payment_secret(PaymentSecret([0x11; 32]))
+		.payment_hash(lightning_invoice::PaymentHash([0x01; 32]))
+		.description("accountable test".to_owned())
+		.accountable()
+		.build_raw()
+		.unwrap()
+		.sign(|hash| {
+			let key = bitcoin::secp256k1::SecretKey::from_slice(&[0xe1; 32]).unwrap();
+			let secp = bitcoin::secp256k1::Secp256k1::new();
+			Ok::<_, bitcoin::secp256k1::Error>(secp.sign_ecdsa_recoverable(hash, &key))
+		})
+		.unwrap();
+
+	// Serialize and deserialize.
+	let serialized = invoice.to_string();
+	let parsed = serialized.parse::<SignedRawBolt11Invoice>().unwrap();
+
+	// Verify the accountable field survived the roundtrip.
+	let raw_invoice = parsed.raw_invoice();
+	assert!(raw_invoice.accountable(), "accountable field should be present after roundtrip");
+
+	// Verify from Bolt11Invoice accessor too.
+	let bolt11 = Bolt11Invoice::from_signed(parsed).unwrap();
+	assert!(bolt11.accountable(), "Bolt11Invoice::accountable() should return true");
+}
+
+#[test]
+fn test_no_accountable_field() {
+	// Build an invoice without the accountable marker field.
+	let invoice = InvoiceBuilder::new(Currency::Bitcoin)
+		.duration_since_epoch(Duration::from_secs(1496314658))
+		.payment_secret(PaymentSecret([0x11; 32]))
+		.payment_hash(lightning_invoice::PaymentHash([0x01; 32]))
+		.description("no accountable test".to_owned())
+		.build_raw()
+		.unwrap()
+		.sign(|hash| {
+			let key = bitcoin::secp256k1::SecretKey::from_slice(&[0xe1; 32]).unwrap();
+			let secp = bitcoin::secp256k1::Secp256k1::new();
+			Ok::<_, bitcoin::secp256k1::Error>(secp.sign_ecdsa_recoverable(hash, &key))
+		})
+		.unwrap();
+
+	let serialized = invoice.to_string();
+	let parsed = serialized.parse::<SignedRawBolt11Invoice>().unwrap();
+	assert!(!parsed.raw_invoice().accountable(), "accountable should be absent");
+
+	let bolt11 = Bolt11Invoice::from_signed(parsed).unwrap();
+	assert!(!bolt11.accountable(), "Bolt11Invoice::accountable() should return false");
+}

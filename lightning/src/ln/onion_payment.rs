@@ -123,15 +123,15 @@ pub(super) fn create_fwd_pending_htlc_info(
 
 	let (
 		routing_info, amt_to_forward, outgoing_cltv_value, intro_node_blinding_point,
-		next_blinding_override
+		next_blinding_override, upgrade_accountability,
 	) = match hop_data {
 		onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionForwardPayload {
-			short_channel_id, amt_to_forward, outgoing_cltv_value, upgrade_accountability: _
+			short_channel_id, amt_to_forward, outgoing_cltv_value, upgrade_accountability,
 		}, new_packet_bytes, next_hop_hmac, .. } =>
-			(RoutingInfo::Direct { short_channel_id, new_packet_bytes, next_hop_hmac }, amt_to_forward, outgoing_cltv_value, None, None),
+			(RoutingInfo::Direct { short_channel_id, new_packet_bytes, next_hop_hmac }, amt_to_forward, outgoing_cltv_value, None, None, upgrade_accountability),
 		onion_utils::Hop::BlindedForward { next_hop_data: msgs::InboundOnionBlindedForwardPayload {
 			short_channel_id, payment_relay, payment_constraints, intro_node_blinding_point, features,
-			next_blinding_override, upgrade_accountability: _,
+			next_blinding_override, upgrade_accountability,
 		}, new_packet_bytes, next_hop_hmac, .. } => {
 			let (amt_to_forward, outgoing_cltv_value) = check_blinded_forward(
 				msg.amount_msat, msg.cltv_expiry, &payment_relay, &payment_constraints, &features
@@ -145,7 +145,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 				}
 			})?;
 			(RoutingInfo::Direct { short_channel_id, new_packet_bytes, next_hop_hmac }, amt_to_forward, outgoing_cltv_value, intro_node_blinding_point,
-				next_blinding_override)
+				next_blinding_override, upgrade_accountability)
 		},
 		onion_utils::Hop::Dummy { .. } => {
 			debug_assert!(false, "Dummy hop should have been peeled earlier");
@@ -179,7 +179,9 @@ pub(super) fn create_fwd_pending_htlc_info(
 				next_trampoline_hop_data.amt_to_forward,
 				next_trampoline_hop_data.outgoing_cltv_value,
 				None,
-				None
+				None,
+				// upgrade_accountability is not relayed via trampoline.
+				false,
 			)
 		},
 		onion_utils::Hop::TrampolineBlindedForward { outer_hop_data, next_trampoline_hop_data, next_trampoline_hop_hmac, new_trampoline_packet_bytes, trampoline_shared_secret, .. } => {
@@ -205,7 +207,9 @@ pub(super) fn create_fwd_pending_htlc_info(
 				amt_to_forward,
 				outgoing_cltv_value,
 				next_trampoline_hop_data.intro_node_blinding_point,
-				next_trampoline_hop_data.next_blinding_override
+				next_trampoline_hop_data.next_blinding_override,
+				// upgrade_accountability is not relayed via trampoline.
+				false,
 			)
 		},
 	};
@@ -274,6 +278,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 		outgoing_cltv_value,
 		skimmed_fee_msat: None,
 		incoming_accountable: msg.accountable.unwrap_or(false),
+		upgrade_accountability,
 	})
 }
 
@@ -472,6 +477,8 @@ pub(super) fn create_recv_pending_htlc_info(
 		outgoing_cltv_value: onion_cltv_expiry,
 		skimmed_fee_msat: counterparty_skimmed_fee_msat,
 		incoming_accountable,
+		// `upgrade_accountability` only matters when forwarding; this is a final hop.
+		upgrade_accountability: false,
 	})
 }
 

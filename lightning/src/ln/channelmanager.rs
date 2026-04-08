@@ -430,6 +430,12 @@ pub struct PendingHTLCInfo {
 	/// An experimental field indicating whether our node's reputation would be held accountable
 	/// for the timely resolution of the received HTLC.
 	pub incoming_accountable: bool,
+	/// Whether the incoming onion payload included the `upgrade_accountability` marker
+	/// (BOLT 4 TLV type 19 in the per-hop payload, or type 3 in `encrypted_recipient_data` for
+	/// blinded hops). When set, this forwarding node is permitted to set `accountable` on the
+	/// outgoing `update_add_htlc` even if the incoming HTLC did not have it set.
+	/// See lightning/bolts#1280.
+	pub upgrade_accountability: bool,
 }
 
 #[derive(Clone, Debug)] // See FundedChannel::revoke_and_ack for why, tl;dr: Rust bug
@@ -7982,6 +7988,7 @@ impl<
 								routing,
 								skimmed_fee_msat,
 								incoming_accountable,
+								upgrade_accountability,
 								..
 							},
 						..
@@ -8083,6 +8090,12 @@ impl<
 						short_chan_id,
 						channel_description
 					);
+					// BOLT 2 forwarding rules (lightning/bolts#1280):
+					// - If the incoming HTLC was already accountable, the outgoing MUST be accountable.
+					// - Otherwise, if the onion carried `upgrade_accountability`, the outgoing MAY be
+					//   accountable; we always opt-in for maximum jamming protection.
+					// - Otherwise, the outgoing MUST NOT be accountable.
+					let outgoing_accountable = *incoming_accountable || *upgrade_accountability;
 					if let Err((reason, msg)) = optimal_channel.queue_add_htlc(
 						*outgoing_amt_msat,
 						*payment_hash,
@@ -8091,7 +8104,7 @@ impl<
 						onion_packet.clone(),
 						*skimmed_fee_msat,
 						next_blinding_point,
-						*incoming_accountable,
+						outgoing_accountable,
 						&self.fee_estimator,
 						&&logger,
 					) {
@@ -17598,6 +17611,7 @@ impl_writeable_tlv_based!(PendingHTLCInfo, {
 	(9, incoming_amt_msat, option),
 	(10, skimmed_fee_msat, option),
 	(11, incoming_accountable, (default_value, false)),
+	(13, upgrade_accountability, (default_value, false)),
 });
 
 impl Writeable for HTLCFailureMsg {

@@ -213,7 +213,14 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 	type PathHopForId = &'b RouteHop;
 	type ReceiveType = msgs::OutboundOnionPayload<'a>;
 	fn new_forward(short_channel_id: u64, amt_to_forward: u64, outgoing_cltv_value: u32) -> Self {
-		Self::Forward { short_channel_id, amt_to_forward, outgoing_cltv_value }
+		Self::Forward {
+			short_channel_id,
+			amt_to_forward,
+			outgoing_cltv_value,
+			// upgrade_accountability is set when the recipient invoice opted into accountability;
+			// threaded through in a later commit. Default false for now.
+			upgrade_accountability: false,
+		}
 	}
 	fn new_receive(
 		recipient_onion: &'a RecipientOnionFields, keysend_preimage: Option<PaymentPreimage>,
@@ -231,6 +238,9 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 			custom_tlvs: &recipient_onion.custom_tlvs,
 			sender_intended_htlc_amt_msat,
 			cltv_expiry_height,
+			// upgrade_accountability is not set by the original sender for non-accountable
+			// invoices; threaded through in a later commit. Default false for now.
+			upgrade_accountability: false,
 		})
 	}
 	fn new_blinded_forward(
@@ -640,6 +650,9 @@ pub(crate) fn set_max_path_length(
 		short_channel_id: 42,
 		amt_to_forward: TOTAL_BITCOIN_SUPPLY_SATOSHIS,
 		outgoing_cltv_value: route_params.payment_params.max_total_cltv_expiry_delta,
+		// Use the conservative (longer) variant when computing max path length to ensure
+		// we always leave room for the marker if upgrade_accountability ends up being set.
+		upgrade_accountability: true,
 	}
 	.serialized_length()
 	.saturating_add(PAYLOAD_HMAC_LEN);
@@ -3269,6 +3282,7 @@ mod tests {
 				short_channel_id: 1,
 				amt_to_forward: 15000,
 				outgoing_cltv_value: 1500,
+				upgrade_accountability: false,
 			}),
 			/*
 			The second payload is represented by raw hex as it contains custom type data. Content:
@@ -3292,11 +3306,13 @@ mod tests {
 				short_channel_id: 3,
 				amt_to_forward: 12500,
 				outgoing_cltv_value: 1250,
+				upgrade_accountability: false,
 			}),
 			RawOnionHopData::new(msgs::OutboundOnionPayload::Forward {
 				short_channel_id: 4,
 				amt_to_forward: 10000,
 				outgoing_cltv_value: 1000,
+				upgrade_accountability: false,
 			}),
 			/*
 			The fifth payload is represented by raw hex as it contains custom type data. Content:

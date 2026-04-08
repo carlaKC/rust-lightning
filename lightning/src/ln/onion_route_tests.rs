@@ -2199,6 +2199,7 @@ fn test_trampoline_onion_payload_construction_vectors() {
 			short_channel_id: (572330 << 40) + (42 << 16) + 2821,
 			amt_to_forward: 150153000,
 			outgoing_cltv_value: 800060,
+			upgrade_accountability: false,
 		},
 		// Carol
 		OutboundOnionPayload::TrampolineEntrypoint {

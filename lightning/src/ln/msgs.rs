@@ -2538,6 +2538,10 @@ mod fuzzy_internal_msgs {
 		/// The value, in msat, of the payment after this hop's fee is deducted.
 		pub amt_to_forward: u64,
 		pub outgoing_cltv_value: u32,
+		/// The `upgrade_accountability` marker (BOLT 4 TLV type 19). Indicates that this
+		/// forwarding hop is permitted to set `accountable` on the outgoing `update_add_htlc`
+		/// even if it was not set on the incoming HTLC.
+		pub upgrade_accountability: bool,
 	}
 
 	#[allow(unused)]
@@ -2558,6 +2562,10 @@ mod fuzzy_internal_msgs {
 		pub custom_tlvs: Vec<(u64, Vec<u8>)>,
 		pub sender_intended_htlc_amt_msat: u64,
 		pub cltv_expiry_height: u32,
+		/// The `upgrade_accountability` marker (BOLT 4 TLV type 19). The receiving node uses
+		/// this to validate that an incoming `accountable` signal is consistent with the
+		/// invoice it issued.
+		pub upgrade_accountability: bool,
 	}
 	pub struct InboundOnionBlindedForwardPayload {
 		pub short_channel_id: u64,
@@ -2623,6 +2631,8 @@ mod fuzzy_internal_msgs {
 			/// The value, in msat, of the payment after this hop's fee is deducted.
 			amt_to_forward: u64,
 			outgoing_cltv_value: u32,
+			/// Whether to include the `upgrade_accountability` marker (BOLT 4 TLV type 19).
+			upgrade_accountability: bool,
 		},
 		TrampolineEntrypoint {
 			amt_to_forward: u64,
@@ -2649,6 +2659,8 @@ mod fuzzy_internal_msgs {
 			custom_tlvs: &'a Vec<(u64, Vec<u8>)>,
 			sender_intended_htlc_amt_msat: u64,
 			cltv_expiry_height: u32,
+			/// Whether to include the `upgrade_accountability` marker (BOLT 4 TLV type 19).
+			upgrade_accountability: bool,
 		},
 		BlindedForward {
 			encrypted_tlvs: &'a Vec<u8>,
@@ -3594,11 +3606,19 @@ impl Readable for FinalOnionHopData {
 impl<'a> Writeable for OutboundOnionPayload<'a> {
 	fn write<W: Writer>(&self, w: &mut W) -> Result<(), io::Error> {
 		match self {
-			Self::Forward { short_channel_id, amt_to_forward, outgoing_cltv_value } => {
+			Self::Forward {
+				short_channel_id,
+				amt_to_forward,
+				outgoing_cltv_value,
+				upgrade_accountability,
+			} => {
+				let upgrade_accountability_tlv =
+					if *upgrade_accountability { Some(()) } else { None };
 				_encode_varint_length_prefixed_tlv!(w, {
 					(2, HighZeroBytesDroppedBigSize(*amt_to_forward), required),
 					(4, HighZeroBytesDroppedBigSize(*outgoing_cltv_value), required),
-					(6, short_channel_id, required)
+					(6, short_channel_id, required),
+					(19, upgrade_accountability_tlv, option)
 				});
 			},
 			Self::TrampolineEntrypoint {
@@ -3636,6 +3656,7 @@ impl<'a> Writeable for OutboundOnionPayload<'a> {
 				sender_intended_htlc_amt_msat,
 				cltv_expiry_height,
 				ref custom_tlvs,
+				upgrade_accountability,
 			} => {
 				// We need to update [`ln::outbound_payment::RecipientOnionFields::with_custom_tlvs`]
 				// to reject any reserved types in the experimental range if new ones are ever
@@ -3644,11 +3665,14 @@ impl<'a> Writeable for OutboundOnionPayload<'a> {
 				let mut custom_tlvs: Vec<&(u64, Vec<u8>)> =
 					custom_tlvs.iter().chain(keysend_tlv.iter()).collect();
 				custom_tlvs.sort_unstable_by_key(|(typ, _)| *typ);
+				let upgrade_accountability_tlv =
+					if *upgrade_accountability { Some(()) } else { None };
 				_encode_varint_length_prefixed_tlv!(w, {
 					(2, HighZeroBytesDroppedBigSize(*sender_intended_htlc_amt_msat), required),
 					(4, HighZeroBytesDroppedBigSize(*cltv_expiry_height), required),
 					(8, payment_data, option),
-					(16, payment_metadata.map(|m| WithoutLength(m)), option)
+					(16, payment_metadata.map(|m| WithoutLength(m)), option),
+					(19, upgrade_accountability_tlv, option)
 				}, custom_tlvs.iter());
 			},
 			Self::BlindedForward { encrypted_tlvs, intro_node_blinding_point } => {
@@ -3782,6 +3806,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 		let mut keysend_preimage: Option<PaymentPreimage> = None;
 		let mut trampoline_onion_packet: Option<TrampolineOnionPacket> = None;
 		let mut invoice_request: Option<InvoiceRequest> = None;
+		let mut upgrade_accountability: Option<()> = None;
 		let mut custom_tlvs = Vec::new();
 
 		let tlv_len = BigSize::read(r)?;
@@ -3796,6 +3821,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 			(12, intro_node_blinding_point, option),
 			(16, payment_metadata, option),
 			(18, total_msat, (option, encoding: (u64, HighZeroBytesDroppedBigSize))),
+			(19, upgrade_accountability, option),
 			(20, trampoline_onion_packet, option),
 			(77_777, invoice_request, option),
 			// See https://github.com/lightning/blips/blob/master/blip-0003.md
@@ -3932,6 +3958,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 				short_channel_id,
 				amt_to_forward: amt.ok_or(DecodeError::InvalidValue)?,
 				outgoing_cltv_value: cltv_value.ok_or(DecodeError::InvalidValue)?,
+				upgrade_accountability: upgrade_accountability.is_some(),
 			}))
 		} else {
 			if encrypted_tlvs_opt.is_some() || total_msat.is_some() || invoice_request.is_some() {
@@ -3949,6 +3976,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 				sender_intended_htlc_amt_msat: amt.ok_or(DecodeError::InvalidValue)?,
 				cltv_expiry_height: cltv_value.ok_or(DecodeError::InvalidValue)?,
 				custom_tlvs,
+				upgrade_accountability: upgrade_accountability.is_some(),
 			}))
 		}
 	}
@@ -4100,6 +4128,8 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundTrampoline
 				sender_intended_htlc_amt_msat: amt.ok_or(DecodeError::InvalidValue)?,
 				cltv_expiry_height: cltv_value.ok_or(DecodeError::InvalidValue)?,
 				custom_tlvs,
+				// upgrade_accountability is not relayed via trampoline; default to false.
+				upgrade_accountability: false,
 			}))
 		}
 	}
@@ -6307,6 +6337,7 @@ mod tests {
 			short_channel_id: 0xdeadbeef1bad1dea,
 			amt_to_forward: 0x0badf00d01020304,
 			outgoing_cltv_value: 0xffffffff,
+			upgrade_accountability: false,
 		};
 		let encoded_value = outbound_msg.encode();
 		let target_value =
@@ -6320,6 +6351,7 @@ mod tests {
 			short_channel_id,
 			amt_to_forward,
 			outgoing_cltv_value,
+			upgrade_accountability: false,
 		}) = inbound_msg
 		{
 			assert_eq!(short_channel_id, 0xdeadbeef1bad1dea);
@@ -6339,6 +6371,7 @@ mod tests {
 			sender_intended_htlc_amt_msat: 0x0badf00d01020304,
 			cltv_expiry_height: 0xffffffff,
 			custom_tlvs: &vec![],
+			upgrade_accountability: false,
 		};
 		let encoded_value = outbound_msg.encode();
 		let target_value = <Vec<u8>>::from_hex("1002080badf00d010203040404ffffffff").unwrap();
@@ -6374,6 +6407,7 @@ mod tests {
 			sender_intended_htlc_amt_msat: 0x0badf00d01020304,
 			cltv_expiry_height: 0xffffffff,
 			custom_tlvs: &vec![],
+			upgrade_accountability: false,
 		};
 		let encoded_value = outbound_msg.encode();
 		let target_value = <Vec<u8>>::from_hex("3602080badf00d010203040404ffffffff082442424242424242424242424242424242424242424242424242424242424242421badca1f").unwrap();
@@ -6389,6 +6423,7 @@ mod tests {
 			payment_metadata: None,
 			keysend_preimage: None,
 			custom_tlvs,
+			upgrade_accountability: false,
 		}) = inbound_msg
 		{
 			assert_eq!(payment_secret, expected_payment_secret);
@@ -6397,6 +6432,53 @@ mod tests {
 			assert_eq!(custom_tlvs, vec![]);
 		} else {
 			panic!();
+		}
+	}
+
+	#[test]
+	fn encoding_nonfinal_onion_hop_data_with_upgrade_accountability() {
+		// Verify that upgrade_accountability TLV (type 19) roundtrips on a Forward payload.
+		let outbound_msg = msgs::OutboundOnionPayload::Forward {
+			short_channel_id: 0xdeadbeef1bad1dea,
+			amt_to_forward: 0x0badf00d01020304,
+			outgoing_cltv_value: 0xffffffff,
+			upgrade_accountability: true,
+		};
+		let encoded_value = outbound_msg.encode();
+		let node_signer = test_utils::TestKeysInterface::new(&[42; 32], Network::Testnet);
+		let inbound_msg: msgs::InboundOnionPayload =
+			ReadableArgs::read(&mut Cursor::new(&encoded_value[..]), (None, &node_signer)).unwrap();
+		match inbound_msg {
+			msgs::InboundOnionPayload::Forward(InboundOnionForwardPayload {
+				upgrade_accountability,
+				..
+			}) => assert!(upgrade_accountability),
+			_ => panic!("expected Forward payload"),
+		}
+	}
+
+	#[test]
+	fn encoding_final_onion_hop_data_with_upgrade_accountability() {
+		// Verify that upgrade_accountability TLV (type 19) roundtrips on a Receive payload.
+		let outbound_msg = msgs::OutboundOnionPayload::Receive {
+			payment_data: None,
+			payment_metadata: None,
+			keysend_preimage: None,
+			sender_intended_htlc_amt_msat: 0x0badf00d01020304,
+			cltv_expiry_height: 0xffffffff,
+			custom_tlvs: &vec![],
+			upgrade_accountability: true,
+		};
+		let encoded_value = outbound_msg.encode();
+		let node_signer = test_utils::TestKeysInterface::new(&[42; 32], Network::Testnet);
+		let inbound_msg: msgs::InboundOnionPayload =
+			ReadableArgs::read(&mut Cursor::new(&encoded_value[..]), (None, &node_signer)).unwrap();
+		match inbound_msg {
+			msgs::InboundOnionPayload::Receive(InboundOnionReceivePayload {
+				upgrade_accountability,
+				..
+			}) => assert!(upgrade_accountability),
+			_ => panic!("expected Receive payload"),
 		}
 	}
 
@@ -6412,6 +6494,7 @@ mod tests {
 			custom_tlvs: &bad_type_range_tlvs,
 			sender_intended_htlc_amt_msat: 0x0badf00d01020304,
 			cltv_expiry_height: 0xffffffff,
+			upgrade_accountability: false,
 		};
 		let encoded_value = msg.encode();
 		let node_signer = test_utils::TestKeysInterface::new(&[42; 32], Network::Testnet);
@@ -6446,6 +6529,7 @@ mod tests {
 			custom_tlvs: &expected_custom_tlvs,
 			sender_intended_htlc_amt_msat: 0x0badf00d01020304,
 			cltv_expiry_height: 0xffffffff,
+			upgrade_accountability: false,
 		};
 		let encoded_value = msg.encode();
 		let target_value = <Vec<u8>>::from_hex("2e02080badf00d010203040404ffffffffff0000000146c6616b021234ff0000000146c6616f084242424242424242").unwrap();
@@ -6801,6 +6885,7 @@ mod tests {
 			short_channel_id: 0xdeadbeef1bad1dea,
 			amt_to_forward: 1000,
 			outgoing_cltv_value: 0xffffffff,
+			upgrade_accountability: false,
 		};
 		let mut encoded_payload = Vec::new();
 		let test_bytes = vec![42u8; 1000];
@@ -6808,6 +6893,7 @@ mod tests {
 			short_channel_id,
 			amt_to_forward,
 			outgoing_cltv_value,
+			upgrade_accountability: _,
 		} = payload
 		{
 			_encode_varint_length_prefixed_tlv!(&mut encoded_payload, {

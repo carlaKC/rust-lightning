@@ -70,6 +70,7 @@ fn large_payment_metadata() {
 		custom_tlvs: &Vec::new(),
 		sender_intended_htlc_amt_msat: MIN_FINAL_VALUE_ESTIMATE_WITH_OVERPAY,
 		cltv_expiry_height: nodes[0].best_block_info().1 + DEFAULT_MAX_TOTAL_CLTV_EXPIRY_DELTA,
+		upgrade_accountability: false,
 	}
 	.serialized_length();
 	let max_metadata_len = 1300

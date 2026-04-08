@@ -21490,6 +21490,7 @@ mod tests {
 					total_msat: sender_intended_amt_msat,
 				}),
 				custom_tlvs: Vec::new(),
+				upgrade_accountability: false,
 			},
 			shared_secret: SharedSecret::from_bytes([0; 32]),
 		};
@@ -21516,6 +21517,7 @@ mod tests {
 					total_msat: sender_intended_amt_msat,
 				}),
 				custom_tlvs: Vec::new(),
+				upgrade_accountability: false,
 			},
 			shared_secret: SharedSecret::from_bytes([0; 32]),
 		};
@@ -21545,6 +21547,7 @@ mod tests {
 					total_msat: 100,
 				}),
 				custom_tlvs: Vec::new(),
+				upgrade_accountability: false,
 			},
 			shared_secret: SharedSecret::from_bytes([0; 32]),
 		}, [0; 32], PaymentHash([0; 32]), 100, TEST_FINAL_CLTV + 1, None, true, None, false, current_height);

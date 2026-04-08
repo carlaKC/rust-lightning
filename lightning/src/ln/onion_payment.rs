@@ -126,7 +126,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 		next_blinding_override
 	) = match hop_data {
 		onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionForwardPayload {
-			short_channel_id, amt_to_forward, outgoing_cltv_value
+			short_channel_id, amt_to_forward, outgoing_cltv_value, upgrade_accountability: _
 		}, new_packet_bytes, next_hop_hmac, .. } =>
 			(RoutingInfo::Direct { short_channel_id, new_packet_bytes, next_hop_hmac }, amt_to_forward, outgoing_cltv_value, None, None),
 		onion_utils::Hop::BlindedForward { next_hop_data: msgs::InboundOnionBlindedForwardPayload {
@@ -642,7 +642,7 @@ pub(super) fn decode_incoming_update_add_htlc_onion<NS: NodeSigner, L: Logger, T
 	};
 
 	let next_packet_details = match next_hop {
-		onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionForwardPayload { short_channel_id, amt_to_forward, outgoing_cltv_value }, shared_secret, .. } => {
+		onion_utils::Hop::Forward { next_hop_data: msgs::InboundOnionForwardPayload { short_channel_id, amt_to_forward, outgoing_cltv_value, upgrade_accountability: _ }, shared_secret, .. } => {
 			let next_packet_pubkey = onion_utils::next_hop_pubkey(secp_ctx,
 				msg.onion_routing_packet.public_key.unwrap(), &shared_secret.secret_bytes());
 			Some(NextPacketDetails {

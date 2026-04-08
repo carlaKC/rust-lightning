@@ -131,7 +131,7 @@ pub(super) fn create_fwd_pending_htlc_info(
 			(RoutingInfo::Direct { short_channel_id, new_packet_bytes, next_hop_hmac }, amt_to_forward, outgoing_cltv_value, None, None),
 		onion_utils::Hop::BlindedForward { next_hop_data: msgs::InboundOnionBlindedForwardPayload {
 			short_channel_id, payment_relay, payment_constraints, intro_node_blinding_point, features,
-			next_blinding_override,
+			next_blinding_override, upgrade_accountability: _,
 		}, new_packet_bytes, next_hop_hmac, .. } => {
 			let (amt_to_forward, outgoing_cltv_value) = check_blinded_forward(
 				msg.amount_msat, msg.cltv_expiry, &payment_relay, &payment_constraints, &features
@@ -297,7 +297,7 @@ pub(super) fn create_recv_pending_htlc_info(
 		onion_utils::Hop::BlindedReceive { hop_data: msgs::InboundOnionBlindedReceivePayload {
 			sender_intended_htlc_amt_msat, total_msat, cltv_expiry_height, payment_secret,
 			intro_node_blinding_point, payment_constraints, payment_context, keysend_preimage,
-			custom_tlvs, invoice_request
+			custom_tlvs, invoice_request, upgrade_accountability: _,
 		}, .. } => {
 			check_blinded_payment_constraints(
 				sender_intended_htlc_amt_msat, cltv_expiry, &payment_constraints
@@ -332,7 +332,7 @@ pub(super) fn create_recv_pending_htlc_info(
 			trampoline_hop_data: msgs::InboundOnionBlindedReceivePayload {
 				sender_intended_htlc_amt_msat, total_msat, cltv_expiry_height, payment_secret,
 				intro_node_blinding_point, payment_constraints, payment_context, keysend_preimage,
-				custom_tlvs, invoice_request
+				custom_tlvs, invoice_request, upgrade_accountability: _,
 			}, ..
 		} => {
 			check_blinded_payment_constraints(

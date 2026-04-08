@@ -2574,6 +2574,9 @@ mod fuzzy_internal_msgs {
 		pub features: BlindedHopFeatures,
 		pub intro_node_blinding_point: Option<PublicKey>,
 		pub next_blinding_override: Option<PublicKey>,
+		/// The `upgrade_accountability` marker decoded from the encrypted_recipient_data
+		/// (BOLT 4 TLV type 3). See lightning/bolts#1280.
+		pub upgrade_accountability: bool,
 	}
 	pub struct InboundOnionDummyPayload {
 		pub payment_relay: PaymentRelay,
@@ -2591,6 +2594,9 @@ mod fuzzy_internal_msgs {
 		pub keysend_preimage: Option<PaymentPreimage>,
 		pub invoice_request: Option<InvoiceRequest>,
 		pub custom_tlvs: Vec<(u64, Vec<u8>)>,
+		/// The `upgrade_accountability` marker decoded from the encrypted_recipient_data
+		/// (BOLT 4 TLV type 3). See lightning/bolts#1280.
+		pub upgrade_accountability: bool,
 	}
 
 	pub enum InboundOnionPayload {
@@ -3878,6 +3884,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 							payment_constraints,
 							features,
 							next_blinding_override,
+							upgrade_accountability,
 						}),
 					used_aad,
 				} => {
@@ -3896,6 +3903,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 						features,
 						intro_node_blinding_point,
 						next_blinding_override,
+						upgrade_accountability,
 					}))
 				},
 				ChaChaTriPolyReadAdapter {
@@ -3925,8 +3933,12 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 						return Err(DecodeError::InvalidValue);
 					}
 
-					let ReceiveTlvs { payment_secret, payment_constraints, payment_context } =
-						receive_tlvs;
+					let ReceiveTlvs {
+						payment_secret,
+						payment_constraints,
+						payment_context,
+						upgrade_accountability,
+					} = receive_tlvs;
 
 					if total_msat.unwrap_or(0) > MAX_VALUE_MSAT {
 						return Err(DecodeError::InvalidValue);
@@ -3942,6 +3954,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundOnionPaylo
 						keysend_preimage,
 						invoice_request,
 						custom_tlvs,
+						upgrade_accountability,
 					}))
 				},
 			}
@@ -4078,8 +4091,12 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundTrampoline
 						return Err(DecodeError::InvalidValue);
 					}
 
-					let ReceiveTlvs { payment_secret, payment_constraints, payment_context } =
-						receive_tlvs;
+					let ReceiveTlvs {
+						payment_secret,
+						payment_constraints,
+						payment_context,
+						upgrade_accountability,
+					} = receive_tlvs;
 
 					if total_msat.unwrap_or(0) > MAX_VALUE_MSAT {
 						return Err(DecodeError::InvalidValue);
@@ -4095,6 +4112,7 @@ impl<NS: NodeSigner> ReadableArgs<(Option<PublicKey>, NS)> for InboundTrampoline
 						keysend_preimage,
 						invoice_request,
 						custom_tlvs,
+						upgrade_accountability,
 					}))
 				},
 			}

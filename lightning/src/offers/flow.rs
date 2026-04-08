@@ -358,6 +358,7 @@ impl<MR: MessageRouter, L: Logger> OffersMessageFlow<MR, L> {
 			payment_secret,
 			payment_constraints: PaymentConstraints { max_cltv_expiry, htlc_minimum_msat: 1 },
 			payment_context,
+			upgrade_accountability: false,
 		};
 
 		router.create_blinded_payment_paths(

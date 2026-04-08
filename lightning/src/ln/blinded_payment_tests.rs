@@ -70,6 +70,7 @@ pub fn blinded_payment_path(
 				},
 				next_blinding_override: None,
 				features: BlindedHopFeatures::empty(),
+				upgrade_accountability: false,
 			},
 			htlc_maximum_msat: intro_node_max_htlc_opt.take()
 				.unwrap_or_else(|| channel_upds[idx - 1].htlc_maximum_msat),
@@ -84,6 +85,7 @@ pub fn blinded_payment_path(
 				intro_node_min_htlc_opt.unwrap_or_else(|| channel_upds.last().unwrap().htlc_minimum_msat),
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 
 	let receive_auth_key = keys_manager.get_receive_auth_key();
@@ -173,6 +175,7 @@ fn do_one_hop_blinded_path(success: bool) {
 			htlc_minimum_msat: chan_upd.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = chanmon_cfgs[1].keys_manager.get_receive_auth_key();
 
@@ -217,6 +220,7 @@ fn one_hop_blinded_path_with_dummy_hops() {
 			htlc_minimum_msat: chan_upd.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = chanmon_cfgs[1].keys_manager.get_receive_auth_key();
 	let dummy_tlvs = [DummyTlvs::default(); 2];
@@ -293,6 +297,7 @@ fn mpp_to_one_hop_blinded_path() {
 			htlc_minimum_msat: chan_upd_1_3.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = chanmon_cfgs[3].keys_manager.get_receive_auth_key();
 	let blinded_path = BlindedPaymentPath::new(
@@ -1412,6 +1417,7 @@ fn custom_tlvs_to_blinded_path() {
 			htlc_minimum_msat: chan_upd.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = chanmon_cfgs[1].keys_manager.get_receive_auth_key();
 
@@ -1466,6 +1472,7 @@ fn fails_receive_tlvs_authentication() {
 			htlc_minimum_msat: chan_upd.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = chanmon_cfgs[1].keys_manager.get_receive_auth_key();
 
@@ -1496,6 +1503,7 @@ fn fails_receive_tlvs_authentication() {
 			htlc_minimum_msat: chan_upd.htlc_minimum_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	// Use a mismatched ReceiveAuthKey to force auth failure:
 	let mismatched_receive_auth_key = ReceiveAuthKey([0u8; 32]);
@@ -1720,7 +1728,7 @@ fn route_blinding_spec_test_vector() {
 		};
 	let (carol_packet_bytes, carol_hmac) = if let onion_utils::Hop::BlindedForward {
 		next_hop_data: msgs::InboundOnionBlindedForwardPayload {
-			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override
+			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override, upgrade_accountability: _,
 		}, next_hop_hmac, new_packet_bytes, ..
 	} = bob_peeled_onion {
 		assert_eq!(short_channel_id, 1729);
@@ -1754,7 +1762,7 @@ fn route_blinding_spec_test_vector() {
 		};
 	let (dave_packet_bytes, dave_hmac) = if let onion_utils::Hop::BlindedForward {
 		next_hop_data: msgs::InboundOnionBlindedForwardPayload {
-			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override
+			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override, upgrade_accountability: _,
 		}, next_hop_hmac, new_packet_bytes, ..
 	} = carol_peeled_onion {
 		assert_eq!(short_channel_id, 1105);
@@ -1788,7 +1796,7 @@ fn route_blinding_spec_test_vector() {
 		};
 	let (eve_packet_bytes, eve_hmac) = if let onion_utils::Hop::BlindedForward {
 		next_hop_data: msgs::InboundOnionBlindedForwardPayload {
-			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override
+			short_channel_id, payment_relay, payment_constraints, features, intro_node_blinding_point, next_blinding_override, upgrade_accountability: _,
 		}, next_hop_hmac, new_packet_bytes, ..
 	} = dave_peeled_onion {
 		assert_eq!(short_channel_id, 561);
@@ -2279,6 +2287,7 @@ fn do_test_trampoline_single_hop_receive(success: bool) {
 			htlc_minimum_msat: amt_msat,
 		},
 		payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+		upgrade_accountability: false,
 	};
 	let receive_auth_key = nodes[2].keys_manager.get_receive_auth_key();
 	let blinded_path = BlindedPaymentPath::new(&[], carol_node_id, receive_auth_key, payee_tlvs, u64::MAX, 0, nodes[2].keys_manager, &secp_ctx).unwrap();
@@ -2438,6 +2447,7 @@ fn create_blinded_tail(
 				htlc_minimum_msat: final_value_msat,
 			},
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		}
 		.encode();
 

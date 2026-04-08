@@ -352,6 +352,10 @@ pub struct ForwardTlvs {
 	/// Set if this [`BlindedPaymentPath`] is concatenated to another, to indicate the
 	/// [`BlindedPaymentPath::blinding_point`] of the appended blinded path.
 	pub next_blinding_override: Option<PublicKey>,
+	/// The `upgrade_accountability` marker (BOLT 4 TLV type 3 in `encrypted_recipient_data`).
+	/// Indicates that the forwarding node is permitted to set `accountable` on the outgoing
+	/// `update_add_htlc` even if it was not set on the incoming HTLC. See lightning/bolts#1280.
+	pub upgrade_accountability: bool,
 }
 
 /// Data to construct a [`BlindedHop`] for forwarding a Trampoline payment.
@@ -414,6 +418,11 @@ pub struct ReceiveTlvs {
 	pub payment_constraints: PaymentConstraints,
 	/// Context for the receiver of this payment.
 	pub payment_context: PaymentContext,
+	/// The `upgrade_accountability` marker (BOLT 4 TLV type 3 in `encrypted_recipient_data`).
+	/// Set by the recipient (when issuing an accountable invoice) so that the receiving node
+	/// can validate that an incoming `accountable` signal is consistent with the invoice.
+	/// See lightning/bolts#1280.
+	pub upgrade_accountability: bool,
 }
 
 /// Data to construct a [`BlindedHop`] for sending a payment over.
@@ -565,8 +574,10 @@ impl Writeable for ForwardTlvs {
 		} else {
 			Some(WithoutLength(&self.features))
 		};
+		let upgrade_accountability_tlv = if self.upgrade_accountability { Some(()) } else { None };
 		encode_tlv_stream!(w, {
 			(2, self.short_channel_id, required),
+			(3, upgrade_accountability_tlv, option),
 			(10, self.payment_relay, required),
 			(12, self.payment_constraints, required),
 			(14, features_opt, option)
@@ -610,7 +621,9 @@ impl Writeable for DummyTlvs {
 // authentication checks), we can reuse that field here.
 impl Writeable for ReceiveTlvs {
 	fn write<W: Writer>(&self, w: &mut W) -> Result<(), io::Error> {
+		let upgrade_accountability_tlv = if self.upgrade_accountability { Some(()) } else { None };
 		encode_tlv_stream!(w, {
+			(3, upgrade_accountability_tlv, option),
 			(12, self.payment_constraints, required),
 			(65536, self.payment_secret, required),
 			(65537, self.payment_context, required),
@@ -638,6 +651,7 @@ impl Readable for BlindedPaymentTlvs {
 			// information, we can safely omit reading it here.
 			// (1, _padding, option),
 			(2, scid, option),
+			(3, upgrade_accountability, option),
 			(8, next_blinding_override, option),
 			(10, payment_relay, option),
 			(12, payment_constraints, required),
@@ -646,6 +660,7 @@ impl Readable for BlindedPaymentTlvs {
 			(65537, payment_context, option),
 			(65539, is_dummy, option)
 		});
+		let upgrade_accountability: Option<()> = upgrade_accountability;
 
 		match (
 			scid,
@@ -663,6 +678,7 @@ impl Readable for BlindedPaymentTlvs {
 					payment_constraints: payment_constraints.0.unwrap(),
 					next_blinding_override: next_override,
 					features: features.unwrap_or_else(BlindedHopFeatures::empty),
+					upgrade_accountability: upgrade_accountability.is_some(),
 				}))
 			},
 			(None, None, None, None, Some(secret), Some(context), None) => {
@@ -670,6 +686,7 @@ impl Readable for BlindedPaymentTlvs {
 					payment_secret: secret,
 					payment_constraints: payment_constraints.0.unwrap(),
 					payment_context: context,
+					upgrade_accountability: upgrade_accountability.is_some(),
 				}))
 			},
 			(None, None, Some(relay), None, None, None, Some(())) => {
@@ -714,6 +731,8 @@ impl Readable for BlindedTrampolineTlvs {
 				payment_secret: payment_secret.ok_or(DecodeError::InvalidValue)?,
 				payment_constraints: payment_constraints.0.unwrap(),
 				payment_context: payment_context.ok_or(DecodeError::InvalidValue)?,
+				// upgrade_accountability is not relayed via trampoline; default to false.
+				upgrade_accountability: false,
 			}))
 		}
 	}
@@ -964,13 +983,53 @@ impl_writeable_tlv_based!(Bolt12RefundContext, {});
 #[cfg(test)]
 mod tests {
 	use crate::blinded_path::payment::{
-		Bolt12RefundContext, ForwardTlvs, PaymentConstraints, PaymentContext, PaymentForwardNode,
-		PaymentRelay, ReceiveTlvs,
+		BlindedPaymentTlvs, Bolt12RefundContext, ForwardTlvs, PaymentConstraints, PaymentContext,
+		PaymentForwardNode, PaymentRelay, ReceiveTlvs,
 	};
 	use crate::ln::functional_test_utils::TEST_FINAL_CLTV;
 	use crate::types::features::BlindedHopFeatures;
 	use crate::types::payment::PaymentSecret;
+	use crate::util::ser::{Readable, Writeable};
 	use bitcoin::secp256k1::PublicKey;
+
+	#[test]
+	fn upgrade_accountability_roundtrip() {
+		// Verify that the upgrade_accountability TLV (type 3) roundtrips through the
+		// ForwardTlvs and ReceiveTlvs encrypted_recipient_data encoding.
+		let forward_tlvs = ForwardTlvs {
+			short_channel_id: 42,
+			payment_relay: PaymentRelay {
+				cltv_expiry_delta: 144,
+				fee_proportional_millionths: 500,
+				fee_base_msat: 100,
+			},
+			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
+			next_blinding_override: None,
+			features: BlindedHopFeatures::empty(),
+			upgrade_accountability: true,
+		};
+		let mut bytes = Vec::new();
+		forward_tlvs.write(&mut bytes).unwrap();
+		let parsed = BlindedPaymentTlvs::read(&mut &bytes[..]).unwrap();
+		match parsed {
+			BlindedPaymentTlvs::Forward(f) => assert!(f.upgrade_accountability),
+			_ => panic!("expected Forward"),
+		}
+
+		let receive_tlvs = ReceiveTlvs {
+			payment_secret: PaymentSecret([0; 32]),
+			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
+			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: true,
+		};
+		let mut bytes = Vec::new();
+		receive_tlvs.write(&mut bytes).unwrap();
+		let parsed = BlindedPaymentTlvs::read(&mut &bytes[..]).unwrap();
+		match parsed {
+			BlindedPaymentTlvs::Receive(r) => assert!(r.upgrade_accountability),
+			_ => panic!("expected Receive"),
+		}
+	}
 
 	#[test]
 	fn compute_payinfo() {
@@ -993,6 +1052,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1011,6 +1071,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1019,6 +1080,7 @@ mod tests {
 			payment_secret: PaymentSecret([0; 32]),
 			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		};
 		let htlc_maximum_msat = 100_000;
 		let blinded_payinfo =
@@ -1037,6 +1099,7 @@ mod tests {
 			payment_secret: PaymentSecret([0; 32]),
 			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		};
 		let blinded_payinfo =
 			super::compute_payinfo(&[], &[], &recv_tlvs, 4242, TEST_FINAL_CLTV as u16).unwrap();
@@ -1068,6 +1131,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1086,6 +1150,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1094,6 +1159,7 @@ mod tests {
 			payment_secret: PaymentSecret([0; 32]),
 			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 3 },
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		};
 		let htlc_maximum_msat = 100_000;
 		let blinded_payinfo = super::compute_payinfo(
@@ -1128,6 +1194,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1146,6 +1213,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: u64::max_value(),
 			},
@@ -1154,6 +1222,7 @@ mod tests {
 			payment_secret: PaymentSecret([0; 32]),
 			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		};
 		let htlc_minimum_msat = 3798;
 		assert!(super::compute_payinfo(
@@ -1199,6 +1268,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: 5_000,
 			},
@@ -1217,6 +1287,7 @@ mod tests {
 					},
 					next_blinding_override: None,
 					features: BlindedHopFeatures::empty(),
+					upgrade_accountability: false,
 				},
 				htlc_maximum_msat: 10_000,
 			},
@@ -1225,6 +1296,7 @@ mod tests {
 			payment_secret: PaymentSecret([0; 32]),
 			payment_constraints: PaymentConstraints { max_cltv_expiry: 0, htlc_minimum_msat: 1 },
 			payment_context: PaymentContext::Bolt12Refund(Bolt12RefundContext {}),
+			upgrade_accountability: false,
 		};
 
 		let blinded_payinfo = super::compute_payinfo(

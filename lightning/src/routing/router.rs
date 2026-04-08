@@ -190,6 +190,7 @@ where
 						payment_constraints,
 						next_blinding_override: None,
 						features: BlindedHopFeatures::empty(),
+						upgrade_accountability: false,
 					},
 					node_id: details.counterparty.node_id,
 					htlc_maximum_msat: details.inbound_htlc_maximum_msat.unwrap_or(u64::MAX),

@@ -474,6 +474,7 @@ impl InvoiceContents {
 
 		let invoice = InvoiceTlvStreamRef {
 			paths: Some(Iterable(self.payment_paths.iter().map(|path| path.inner_blinded_path()))),
+			accountable: None,
 			held_htlc_available_paths: Some(self.held_htlc_available_paths.as_ref()),
 			blindedpay: Some(Iterable(self.payment_paths.iter().map(|path| &path.payinfo))),
 			created_at: Some(self.created_at.as_secs()),
@@ -673,6 +674,7 @@ impl TryFrom<PartialInvoiceTlvStream> for InvoiceContents {
 			offer_tlv_stream,
 			InvoiceTlvStream {
 				paths,
+				accountable: _,
 				blindedpay,
 				created_at,
 				relative_expiry,
@@ -923,6 +925,7 @@ mod tests {
 					paths: Some(Iterable(
 						payment_paths.iter().map(|path| path.inner_blinded_path())
 					)),
+					accountable: None,
 					blindedpay: Some(Iterable(payment_paths.iter().map(|path| &path.payinfo))),
 					created_at: Some(now.as_secs()),
 					relative_expiry: None,

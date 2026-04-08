@@ -422,6 +422,7 @@ macro_rules! invoice_builder_methods {
 				fallbacks: None,
 				features: Bolt12InvoiceFeatures::empty(),
 				signing_pubkey,
+				accountable: false,
 				#[cfg(test)]
 				experimental_baz: None,
 			}
@@ -437,6 +438,14 @@ macro_rules! invoice_builder_methods {
 			}
 
 			Ok(Self { invreq_bytes, invoice: contents, signing_pubkey_strategy })
+		}
+
+		/// Includes the `invoice_accountable` marker indicating the recipient is willing to be
+		/// held accountable for fast resolution of the HTLC (within 90 seconds of arrival).
+		/// See lightning/bolts#1280.
+		pub fn accountable($($self_mut)* $self: $self_type) -> $return_type {
+			$self.invoice.fields_mut().accountable = true;
+			$return_value
 		}
 	};
 }
@@ -773,6 +782,9 @@ struct InvoiceFields {
 	fallbacks: Option<Vec<FallbackAddress>>,
 	features: Bolt12InvoiceFeatures,
 	signing_pubkey: PublicKey,
+	/// Whether the recipient is willing to be held accountable for fast resolution
+	/// of the HTLC (within 90 seconds of arrival). See lightning/bolts#1280.
+	accountable: bool,
 	#[cfg(test)]
 	experimental_baz: Option<u64>,
 }
@@ -944,6 +956,12 @@ macro_rules! invoice_accessors { ($self: ident, $contents: expr) => {
 	/// The minimum amount required for a successful payment of the invoice.
 	pub fn amount_msats(&$self) -> u64 {
 		$contents.amount_msats()
+	}
+
+	/// Whether the recipient included the `accountable` marker indicating they will
+	/// resolve the payment within 90 seconds of HTLC arrival. See lightning/bolts#1280.
+	pub fn invoice_accountable(&$self) -> bool {
+		$contents.invoice_accountable()
 	}
 } }
 
@@ -1299,6 +1317,10 @@ impl InvoiceContents {
 		self.fields().signing_pubkey
 	}
 
+	fn invoice_accountable(&self) -> bool {
+		self.fields().accountable
+	}
+
 	fn fields(&self) -> &InvoiceFields {
 		match self {
 			InvoiceContents::ForOffer { fields, .. } => fields,
@@ -1420,6 +1442,7 @@ impl InvoiceFields {
 				paths: Some(Iterable(
 					self.payment_paths.iter().map(|path| path.inner_blinded_path()),
 				)),
+				accountable: if self.accountable { Some(&()) } else { None },
 				blindedpay: Some(Iterable(self.payment_paths.iter().map(|path| &path.payinfo))),
 				created_at: Some(self.created_at.as_secs()),
 				relative_expiry: self.relative_expiry.map(|duration| duration.as_secs() as u32),
@@ -1502,6 +1525,7 @@ pub(super) const INVOICE_TYPES: core::ops::Range<u64> = 160..240;
 
 tlv_stream!(InvoiceTlvStream, InvoiceTlvStreamRef<'a>, INVOICE_TYPES, {
 	(160, paths: (Vec<BlindedPath>, WithoutLength, Iterable<'a, BlindedPathIter<'a>, BlindedPath>)),
+	(161, accountable: ()),
 	(162, blindedpay: (Vec<BlindedPayInfo>, WithoutLength, Iterable<'a, BlindedPayInfoIter<'a>, BlindedPayInfo>)),
 	(164, created_at: (u64, HighZeroBytesDroppedBigSize)),
 	(166, relative_expiry: (u32, HighZeroBytesDroppedBigSize)),
@@ -1692,6 +1716,7 @@ impl TryFrom<PartialInvoiceTlvStream> for InvoiceContents {
 			invoice_request_tlv_stream,
 			InvoiceTlvStream {
 				paths,
+				accountable,
 				blindedpay,
 				created_at,
 				relative_expiry,
@@ -1740,6 +1765,7 @@ impl TryFrom<PartialInvoiceTlvStream> for InvoiceContents {
 			fallbacks,
 			features,
 			signing_pubkey,
+			accountable: accountable.is_some(),
 			#[cfg(test)]
 			experimental_baz,
 		};
@@ -2029,6 +2055,7 @@ mod tests {
 					paths: Some(Iterable(
 						payment_paths.iter().map(|path| path.inner_blinded_path())
 					)),
+					accountable: None,
 					blindedpay: Some(Iterable(payment_paths.iter().map(|path| &path.payinfo))),
 					created_at: Some(now.as_secs()),
 					relative_expiry: None,
@@ -2132,6 +2159,7 @@ mod tests {
 					paths: Some(Iterable(
 						payment_paths.iter().map(|path| path.inner_blinded_path())
 					)),
+					accountable: None,
 					blindedpay: Some(Iterable(payment_paths.iter().map(|path| &path.payinfo))),
 					created_at: Some(now.as_secs()),
 					relative_expiry: None,
@@ -2570,6 +2598,60 @@ mod tests {
 		let (_, _, _, tlv_stream, _, _, _, _) = invoice.as_tlv_stream();
 		assert_eq!(invoice.invoice_features(), &features);
 		assert_eq!(tlv_stream.features, Some(&features));
+	}
+
+	#[test]
+	fn builds_invoice_with_accountable() {
+		let expanded_key = ExpandedKey::new([42; 32]);
+		let entropy = FixedEntropy {};
+		let nonce = Nonce::from_entropy_source(&entropy);
+		let secp_ctx = Secp256k1::new();
+		let payment_id = PaymentId([1; 32]);
+
+		// Build an invoice with the accountable marker.
+		let invoice = OfferBuilder::new(recipient_pubkey())
+			.amount_msats(1000)
+			.build()
+			.unwrap()
+			.request_invoice(&expanded_key, nonce, &secp_ctx, payment_id)
+			.unwrap()
+			.build_and_sign()
+			.unwrap()
+			.respond_with_no_std(payment_paths(), payment_hash(), now())
+			.unwrap()
+			.accountable()
+			.build()
+			.unwrap()
+			.sign(recipient_sign)
+			.unwrap();
+		assert!(invoice.invoice_accountable());
+		let (_, _, _, tlv_stream, _, _, _, _) = invoice.as_tlv_stream();
+		assert_eq!(tlv_stream.accountable, Some(&()));
+
+		// Verify roundtrip.
+		let mut bytes = Vec::new();
+		invoice.write(&mut bytes).unwrap();
+		let parsed = Bolt12Invoice::try_from(bytes).unwrap();
+		assert!(parsed.invoice_accountable());
+
+		// Build an invoice without accountable - it should default to false.
+		let invoice = OfferBuilder::new(recipient_pubkey())
+			.amount_msats(1000)
+			.build()
+			.unwrap()
+			.request_invoice(&expanded_key, nonce, &secp_ctx, payment_id)
+			.unwrap()
+			.build_and_sign()
+			.unwrap()
+			.respond_with_no_std(payment_paths(), payment_hash(), now())
+			.unwrap()
+			.build()
+			.unwrap()
+			.sign(recipient_sign)
+			.unwrap();
+		assert!(!invoice.invoice_accountable());
+		let (_, _, _, tlv_stream, _, _, _, _) = invoice.as_tlv_stream();
+		assert_eq!(tlv_stream.accountable, None);
 	}
 
 	#[test]

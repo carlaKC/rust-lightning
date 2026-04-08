@@ -146,6 +146,7 @@ fn large_payment_metadata() {
 		&None,
 		None,
 		[0; 32],
+		false,
 	)
 	.unwrap_err();
 	match err {
@@ -439,6 +440,7 @@ fn blinded_path_with_custom_tlv() {
 		&None,
 		None,
 		[0; 32],
+		false,
 	)
 	.unwrap_err();
 	match err {

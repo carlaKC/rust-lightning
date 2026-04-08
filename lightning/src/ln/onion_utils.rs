@@ -189,11 +189,11 @@ trait OnionPayload<'a, 'b> {
 	type ReceiveType: OnionPayload<'a, 'b>;
 	fn new_forward(
 		hop_id: <<Self as OnionPayload<'a, 'b>>::PathHopForId as PathHop>::HopId,
-		amt_to_forward: u64, outgoing_cltv_value: u32,
+		amt_to_forward: u64, outgoing_cltv_value: u32, upgrade_accountability: bool,
 	) -> Self;
 	fn new_receive(
 		recipient_onion: &'a RecipientOnionFields, keysend_preimage: Option<PaymentPreimage>,
-		sender_intended_htlc_amt_msat: u64, cltv_expiry_height: u32,
+		sender_intended_htlc_amt_msat: u64, cltv_expiry_height: u32, upgrade_accountability: bool,
 	) -> Result<Self::ReceiveType, APIError>;
 	fn new_blinded_forward(
 		encrypted_tlvs: &'a Vec<u8>, intro_node_blinding_point: Option<PublicKey>,
@@ -212,19 +212,20 @@ trait OnionPayload<'a, 'b> {
 impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 	type PathHopForId = &'b RouteHop;
 	type ReceiveType = msgs::OutboundOnionPayload<'a>;
-	fn new_forward(short_channel_id: u64, amt_to_forward: u64, outgoing_cltv_value: u32) -> Self {
+	fn new_forward(
+		short_channel_id: u64, amt_to_forward: u64, outgoing_cltv_value: u32,
+		upgrade_accountability: bool,
+	) -> Self {
 		Self::Forward {
 			short_channel_id,
 			amt_to_forward,
 			outgoing_cltv_value,
-			// upgrade_accountability is set when the recipient invoice opted into accountability;
-			// threaded through in a later commit. Default false for now.
-			upgrade_accountability: false,
+			upgrade_accountability,
 		}
 	}
 	fn new_receive(
 		recipient_onion: &'a RecipientOnionFields, keysend_preimage: Option<PaymentPreimage>,
-		sender_intended_htlc_amt_msat: u64, cltv_expiry_height: u32,
+		sender_intended_htlc_amt_msat: u64, cltv_expiry_height: u32, upgrade_accountability: bool,
 	) -> Result<Self::ReceiveType, APIError> {
 		Ok(Self::Receive {
 			payment_data: recipient_onion.payment_secret.map(|payment_secret| {
@@ -238,9 +239,7 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundOnionPayload<'a> {
 			custom_tlvs: &recipient_onion.custom_tlvs,
 			sender_intended_htlc_amt_msat,
 			cltv_expiry_height,
-			// upgrade_accountability is not set by the original sender for non-accountable
-			// invoices; threaded through in a later commit. Default false for now.
-			upgrade_accountability: false,
+			upgrade_accountability,
 		})
 	}
 	fn new_blinded_forward(
@@ -287,13 +286,21 @@ impl<'a, 'b> OnionPayload<'a, 'b> for msgs::OutboundTrampolinePayload<'a> {
 	type PathHopForId = &'b TrampolineHop;
 	type ReceiveType = msgs::OutboundTrampolinePayload<'a>;
 	fn new_forward(
-		outgoing_node_id: PublicKey, amt_to_forward: u64, outgoing_cltv_value: u32,
+		outgoing_node_id: PublicKey,
+		amt_to_forward: u64,
+		outgoing_cltv_value: u32,
+		// upgrade_accountability is not relayed via trampoline; ignored.
+		_upgrade_accountability: bool,
 	) -> Self {
 		Self::Forward { outgoing_node_id, amt_to_forward, outgoing_cltv_value }
 	}
 	fn new_receive(
-		_recipient_onion: &'a RecipientOnionFields, _keysend_preimage: Option<PaymentPreimage>,
-		_sender_intended_htlc_amt_msat: u64, _cltv_expiry_height: u32,
+		_recipient_onion: &'a RecipientOnionFields,
+		_keysend_preimage: Option<PaymentPreimage>,
+		_sender_intended_htlc_amt_msat: u64,
+		_cltv_expiry_height: u32,
+		// upgrade_accountability is not relayed via trampoline; ignored.
+		_upgrade_accountability: bool,
 	) -> Result<Self::ReceiveType, APIError> {
 		Err(APIError::InvalidRoute {
 			err: "Unblinded receiving is not supported for Trampoline!".to_string(),
@@ -443,6 +450,8 @@ pub(super) fn build_trampoline_onion_payloads<'a>(
 		cur_block_height,
 		keysend_preimage,
 		None,
+		// upgrade_accountability is not relayed via trampoline.
+		false,
 		|action, payload| match action {
 			PayloadCallbackAction::PushBack => res.push(payload),
 			PayloadCallbackAction::PushFront => res.insert(0, payload),
@@ -465,6 +474,7 @@ pub(crate) fn test_build_onion_payloads<'a>(
 		keysend_preimage,
 		invoice_request,
 		trampoline_packet,
+		false,
 	)
 }
 
@@ -472,7 +482,7 @@ pub(crate) fn test_build_onion_payloads<'a>(
 fn build_onion_payloads<'a>(
 	path: &'a Path, recipient_onion: &'a RecipientOnionFields, cur_block_height: u32,
 	keysend_preimage: &Option<PaymentPreimage>, invoice_request: Option<&'a InvoiceRequest>,
-	trampoline_packet: Option<msgs::TrampolineOnionPacket>,
+	trampoline_packet: Option<msgs::TrampolineOnionPacket>, invoice_accountable: bool,
 ) -> Result<(Vec<msgs::OutboundOnionPayload<'a>>, u64, u32), APIError> {
 	let mut res: Vec<msgs::OutboundOnionPayload> = Vec::with_capacity(
 		path.hops.len() + path.blinded_tail.as_ref().map_or(0, |t| t.hops.len()),
@@ -503,6 +513,7 @@ fn build_onion_payloads<'a>(
 		cur_block_height,
 		keysend_preimage,
 		invoice_request,
+		invoice_accountable,
 		|action, payload| match action {
 			PayloadCallbackAction::PushBack => res.push(payload),
 			PayloadCallbackAction::PushFront => res.insert(0, payload),
@@ -532,7 +543,7 @@ fn build_onion_payloads_callback<'a, 'b, H, B, F, OP>(
 	hops: H, mut blinded_tail: Option<BlindedTailDetails<'a, B>>,
 	recipient_onion: &'a RecipientOnionFields, cur_block_height: u32,
 	keysend_preimage: &Option<PaymentPreimage>, invoice_request: Option<&'a InvoiceRequest>,
-	mut callback: F,
+	invoice_accountable: bool, mut callback: F,
 ) -> Result<(u64, u32), APIError>
 where
 	H: DoubleEndedIterator<Item = OP::PathHopForId>,
@@ -611,6 +622,7 @@ where
 							*keysend_preimage,
 							value_msat,
 							declared_incoming_cltv,
+							invoice_accountable,
 						)?,
 					);
 				},
@@ -622,6 +634,7 @@ where
 				})?,
 				value_msat,
 				cur_cltv,
+				invoice_accountable,
 			);
 			callback(PayloadCallbackAction::PushFront, payload);
 		}
@@ -643,16 +656,15 @@ pub(crate) const MIN_FINAL_VALUE_ESTIMATE_WITH_OVERPAY: u64 = 100_000_000;
 pub(crate) fn set_max_path_length(
 	route_params: &mut RouteParameters, recipient_onion: &RecipientOnionFields,
 	keysend_preimage: Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>,
-	best_block_height: u32,
+	best_block_height: u32, invoice_accountable: bool,
 ) -> Result<(), ()> {
 	const PAYLOAD_HMAC_LEN: usize = 32;
 	let unblinded_intermed_payload_len = msgs::OutboundOnionPayload::Forward {
 		short_channel_id: 42,
 		amt_to_forward: TOTAL_BITCOIN_SUPPLY_SATOSHIS,
 		outgoing_cltv_value: route_params.payment_params.max_total_cltv_expiry_delta,
-		// Use the conservative (longer) variant when computing max path length to ensure
-		// we always leave room for the marker if upgrade_accountability ends up being set.
-		upgrade_accountability: true,
+		// Mirror the actual onion that will be built so the size estimate is accurate.
+		upgrade_accountability: invoice_accountable,
 	}
 	.serialized_length()
 	.saturating_add(PAYLOAD_HMAC_LEN);
@@ -699,6 +711,7 @@ pub(crate) fn set_max_path_length(
 		best_block_height,
 		&keysend_preimage,
 		invoice_request,
+		invoice_accountable,
 		|_, payload: msgs::OutboundOnionPayload| {
 			num_reserved_bytes = num_reserved_bytes
 				.saturating_add(payload.serialized_length())
@@ -2615,11 +2628,15 @@ pub(super) fn peel_dummy_hop_update_add_htlc<NS: NodeSigner, T: secp256k1::Verif
 /// Build a payment onion, returning the first hop msat and cltv values as well.
 ///
 /// `cur_block_height` should be set to the best known block height + 1.
+///
+/// `invoice_accountable` should be set to `true` when the recipient invoice carries
+/// the `accountable` marker (BOLT 11 `a` field or BOLT 12 `invoice_accountable` TLV)
+/// so that the `upgrade_accountability` marker is included on every non-blinded hop.
 pub fn create_payment_onion<T: secp256k1::Signing>(
 	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey,
 	recipient_onion: &RecipientOnionFields, cur_block_height: u32, payment_hash: &PaymentHash,
 	keysend_preimage: &Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>,
-	prng_seed: [u8; 32],
+	prng_seed: [u8; 32], invoice_accountable: bool,
 ) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
 	create_payment_onion_internal(
 		secp_ctx,
@@ -2633,6 +2650,7 @@ pub fn create_payment_onion<T: secp256k1::Signing>(
 		prng_seed,
 		None,
 		None,
+		invoice_accountable,
 	)
 }
 
@@ -2650,7 +2668,7 @@ pub(crate) fn create_payment_onion_internal<T: secp256k1::Signing>(
 	recipient_onion: &RecipientOnionFields, cur_block_height: u32, payment_hash: &PaymentHash,
 	keysend_preimage: &Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>,
 	prng_seed: [u8; 32], trampoline_session_priv_override: Option<SecretKey>,
-	trampoline_prng_seed_override: Option<[u8; 32]>,
+	trampoline_prng_seed_override: Option<[u8; 32]>, invoice_accountable: bool,
 ) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
 	// If we're paying to a recipient through a trampoline, we use the `payment_secret` provided in
 	// `recipient_onion` as the MPP identifier for the trampoline entry point, allowing it to
@@ -2713,6 +2731,7 @@ pub(crate) fn create_payment_onion_internal<T: secp256k1::Signing>(
 		keysend_preimage,
 		invoice_request,
 		trampoline_packet_option,
+		invoice_accountable,
 	)?;
 	debug_assert_eq!(htlc_cltv - cur_block_height, path.total_cltv_expiry_delta());
 
@@ -4079,7 +4098,7 @@ mod tests {
 		};
 		route_params.payment_params.max_total_cltv_expiry_delta = u32::MAX;
 		let recipient_onion = RecipientOnionFields::spontaneous_empty(u64::MAX);
-		set_max_path_length(&mut route_params, &recipient_onion, None, None, 42).unwrap();
+		set_max_path_length(&mut route_params, &recipient_onion, None, None, 42, false).unwrap();
 	}
 
 	#[test]

@@ -818,7 +818,7 @@ mod tests {
 
 		let (onion, amount_msat, cltv_expiry) = create_payment_onion(
 			&secp_ctx, &path, &session_priv, &recipient_onion,
-			cur_height, &payment_hash, &Some(preimage), None, prng_seed
+			cur_height, &payment_hash, &Some(preimage), None, prng_seed, false,
 		).unwrap();
 
 		let msg = make_update_add_msg(amount_msat, cltv_expiry, payment_hash, onion);

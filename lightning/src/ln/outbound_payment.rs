@@ -1168,6 +1168,10 @@ impl OutboundPayments {
 			payment_id, payment_hash, &recipient_onion, keysend_preimage, invoice_request,
 			&mut route_params, router, &first_hops, &inflight_htlcs, node_signer, best_block_height,
 			logger,
+			// Bolt12 payments funnel through `send_payment_along_path`, which derives
+			// `invoice_accountable` from the actual invoice; assume non-accountable for the
+			// initial route search to keep the size estimate accurate.
+			false,
 		) {
 			Ok(route) => route,
 			Err(e) => {
@@ -1307,6 +1311,8 @@ impl OutboundPayments {
 						Some(keysend_preimage),
 						Some(invreq),
 						best_block_height,
+						// StaticInvoice does not signal accountability today.
+						false,
 					) {
 						abandon_with_entry!(entry, PaymentFailureReason::RouteNotFound);
 						return Err(Bolt12PaymentError::SendingFailed(
@@ -1534,6 +1540,7 @@ impl OutboundPayments {
 		keysend_preimage: Option<PaymentPreimage>, invoice_request: Option<&InvoiceRequest>,
 		route_params: &mut RouteParameters, router: &R, first_hops: &Vec<ChannelDetails>,
 		inflight_htlcs: &IH, node_signer: &NS, best_block_height: u32, logger: &WithContext<L>,
+		invoice_accountable: bool,
 	) -> Result<Route, RetryableSendFailure>
 	where
 		IH: Fn() -> InFlightHtlcs,
@@ -1547,7 +1554,8 @@ impl OutboundPayments {
 		}
 
 		onion_utils::set_max_path_length(
-			route_params, recipient_onion, keysend_preimage, invoice_request, best_block_height
+			route_params, recipient_onion, keysend_preimage, invoice_request, best_block_height,
+			invoice_accountable,
 		)
 			.map_err(|()| {
 				log_error!(logger, "Can't construct an onion packet without exceeding 1300-byte onion \
@@ -1589,9 +1597,12 @@ impl OutboundPayments {
 		IH: Fn() -> InFlightHtlcs,
 		SP: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
+		// BOLT11 senders don't currently parse the invoice's `accountable` marker through this
+		// path, so default to `false`. The forwarding-side upgrade will not happen for BOLT11
+		// payments yet, but the wire format and structures are in place.
 		let route = self.find_initial_route(
 			payment_id, payment_hash, &recipient_onion, keysend_preimage, None, &mut route_params, router,
-			&first_hops, &inflight_htlcs, node_signer, best_block_height, logger,
+			&first_hops, &inflight_htlcs, node_signer, best_block_height, logger, false,
 		)?;
 
 		let onion_session_privs = self.add_new_pending_payment(payment_hash,

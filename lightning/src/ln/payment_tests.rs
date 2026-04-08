@@ -5101,6 +5101,7 @@ fn peel_payment_onion_custom_tlvs() {
 		&Some(keysend_preimage),
 		None,
 		prng_seed,
+		false,
 	)
 	.unwrap();
 

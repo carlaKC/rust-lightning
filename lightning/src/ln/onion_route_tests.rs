@@ -2081,6 +2081,7 @@ fn test_trampoline_onion_payload_assembly_values() {
 		&None,
 		None,
 		prng_seed,
+		false,
 	)
 	.unwrap();
 	assert_eq!(total_msat_combined, total_msat);

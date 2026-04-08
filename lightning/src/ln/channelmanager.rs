@@ -5424,6 +5424,15 @@ impl<
 			Some(*payment_hash),
 			payment_id,
 		);
+		// If we're paying a BOLT12 invoice that opted into accountability, include the
+		// `upgrade_accountability` marker on every non-blinded hop so that forwarding nodes
+		// may set `accountable` on the outgoing HTLC. The blinded portion of the route
+		// already carries this marker via `encrypted_recipient_data` (see commit 4).
+		// StaticInvoice does not currently signal accountability.
+		let invoice_accountable = match bolt12_invoice {
+			Some(crate::events::PaidBolt12Invoice::Bolt12Invoice(inv)) => inv.invoice_accountable(),
+			_ => false,
+		};
 		let (onion_packet, htlc_msat, htlc_cltv) = onion_utils::create_payment_onion(
 			&self.secp_ctx,
 			&path,
@@ -5434,6 +5443,7 @@ impl<
 			keysend_preimage,
 			invoice_request,
 			prng_seed,
+			invoice_accountable,
 		)
 		.map_err(|e| {
 			log_error!(logger, "Failed to build an onion for path");

@@ -937,8 +937,10 @@ impl RouteParameters {
 	) -> Result<(), ()> {
 		let keysend_preimage_opt = is_keysend.then(|| PaymentPreimage([42; 32]));
 		// TODO: no way to account for the invoice request here yet
+		// We don't know whether the invoice is accountable from this entry point, so reserve
+		// space conservatively (assume it is) to avoid producing routes that overflow the onion.
 		onion_utils::set_max_path_length(
-			self, recipient_onion, keysend_preimage_opt, None, best_block_height
+			self, recipient_onion, keysend_preimage_opt, None, best_block_height, true,
 		)
 	}
 }

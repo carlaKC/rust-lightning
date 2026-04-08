@@ -105,6 +105,65 @@ fn test_accountable_signal() {
 }
 
 #[test]
+fn test_recv_accountable_without_upgrade_accountability_logs_warning() {
+	// BOLT 4 receiver validation rule (lightning/bolts#1280): if `accountable` was set on the
+	// incoming `update_add_htlc` but the onion did not carry `upgrade_accountability`, the
+	// signal may have been tampered with by an upstream node. We accept the HTLC but log a
+	// warning ("read-only" mode until the spec stabilizes).
+	let chanmon_cfgs = create_chanmon_cfgs(3);
+	let node_cfgs = create_node_cfgs(3, &chanmon_cfgs);
+	let node_chanmgrs = create_node_chanmgrs(3, &node_cfgs, &[None, None, None]);
+	let nodes = create_network(3, &node_cfgs, &node_chanmgrs);
+
+	let _chan_ab = create_announced_chan_between_nodes(&nodes, 0, 1);
+	let _chan_bc = create_announced_chan_between_nodes(&nodes, 1, 2);
+
+	let (payment_preimage, payment_hash, payment_secret) =
+		get_payment_preimage_hash(&nodes[2], None, None);
+	let route_params = RouteParameters::from_payment_params_and_value(
+		PaymentParameters::from_node_id(nodes[2].node.get_our_node_id(), TEST_FINAL_CLTV),
+		100_000,
+	);
+	let onion_fields = RecipientOnionFields::secret_only(payment_secret, 100_000);
+	let payment_id = PaymentId(payment_hash.0);
+	nodes[0]
+		.node
+		.send_payment(payment_hash, onion_fields, payment_id, route_params, Retry::Attempts(0))
+		.unwrap();
+	check_added_monitors(&nodes[0], 1);
+
+	// The sender did not flag the invoice as accountable, so the onion does NOT carry
+	// `upgrade_accountability`. Override the accountable flag in the wire message to simulate
+	// an upstream node tampering with the signal.
+	let updates_ab = get_htlc_update_msgs(&nodes[0], &nodes[1].node.get_our_node_id());
+	let mut htlc_ab = updates_ab.update_add_htlcs[0].clone();
+	htlc_ab.accountable = Some(true);
+	nodes[1].node.handle_update_add_htlc(nodes[0].node.get_our_node_id(), &htlc_ab);
+	do_commitment_signed_dance(&nodes[1], &nodes[0], &updates_ab.commitment_signed, false, false);
+	expect_and_process_pending_htlcs(&nodes[1], false);
+	check_added_monitors(&nodes[1], 1);
+
+	// Forward to node 2 (still without upgrade_accountability in the onion).
+	let updates_bc = get_htlc_update_msgs(&nodes[1], &nodes[2].node.get_our_node_id());
+	let mut htlc_bc = updates_bc.update_add_htlcs[0].clone();
+	// Force the accountable flag to true on the outgoing HTLC to node 2 as well.
+	htlc_bc.accountable = Some(true);
+	nodes[2].node.handle_update_add_htlc(nodes[1].node.get_our_node_id(), &htlc_bc);
+	do_commitment_signed_dance(&nodes[2], &nodes[1], &updates_bc.commitment_signed, false, false);
+	expect_and_process_pending_htlcs(&nodes[2], false);
+
+	// Node 2 should have logged a warning about the inconsistent signal.
+	nodes[2].logger.assert_log_contains(
+		"lightning::ln::onion_payment",
+		"upgrade_accountability",
+		1,
+	);
+
+	expect_payment_claimable!(nodes[2], payment_hash, payment_secret, 100_000);
+	claim_payment(&nodes[0], &[&nodes[1], &nodes[2]], payment_preimage);
+}
+
+#[test]
 fn test_upgrade_accountability_on_forward() {
 	// Tests that when the incoming onion carries `upgrade_accountability` (BOLT 4 TLV type 19)
 	// but the incoming `update_add_htlc` does not have `accountable` set, the forwarding node

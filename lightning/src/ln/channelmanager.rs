@@ -5268,7 +5268,7 @@ impl<
 				let current_height: u32 = self.best_block.read().unwrap().height;
 				create_recv_pending_htlc_info(decoded_hop, shared_secret, msg.payment_hash,
 					msg.amount_msat, msg.cltv_expiry, None, allow_underpay, msg.skimmed_fee_msat,
-					msg.accountable.unwrap_or(false), current_height)
+					msg.accountable.unwrap_or(false), current_height, &self.logger)
 			},
 			onion_utils::Hop::Forward { .. } | onion_utils::Hop::BlindedForward { .. } => {
 				create_fwd_pending_htlc_info(msg, decoded_hop, shared_secret, next_packet_pubkey_opt)
@@ -7874,6 +7874,7 @@ impl<
 								None,
 								incoming_accountable,
 								current_height,
+								&logger,
 							);
 							match create_res {
 								Ok(info) => phantom_receives.push(PendingAddHTLCInfo {
@@ -21521,10 +21522,11 @@ mod tests {
 		// Check that if the amount we received + the penultimate hop extra fee is less than the sender
 		// intended amount, we fail the payment.
 		let current_height: u32 = node[0].node.best_block.read().unwrap().height;
+		let test_logger = crate::util::test_utils::TestLogger::new();
 		if let Err(crate::ln::channelmanager::InboundHTLCErr { reason, .. }) =
 			create_recv_pending_htlc_info(hop_data, [0; 32], PaymentHash([0; 32]),
 				sender_intended_amt_msat - extra_fee_msat - 1, 42, None, true, Some(extra_fee_msat),
-				false, current_height)
+				false, current_height, &test_logger)
 		{
 			assert_eq!(reason, LocalHTLCFailureReason::FinalIncorrectHTLCAmount);
 		} else { panic!(); }
@@ -21548,7 +21550,7 @@ mod tests {
 		let current_height: u32 = node[0].node.best_block.read().unwrap().height;
 		assert!(create_recv_pending_htlc_info(hop_data, [0; 32], PaymentHash([0; 32]),
 			sender_intended_amt_msat - extra_fee_msat, 42, None, true, Some(extra_fee_msat),
-			false, current_height).is_ok());
+			false, current_height, &test_logger).is_ok());
 	}
 
 	#[test]
@@ -21560,6 +21562,7 @@ mod tests {
 		let node = create_network(1, &node_cfg, &node_chanmgr);
 
 		let current_height: u32 = node[0].node.best_block.read().unwrap().height;
+		let test_logger = crate::util::test_utils::TestLogger::new();
 		let result = create_recv_pending_htlc_info(onion_utils::Hop::Receive {
 			hop_data: msgs::InboundOnionReceivePayload {
 				sender_intended_htlc_amt_msat: 100,
@@ -21574,7 +21577,7 @@ mod tests {
 				upgrade_accountability: false,
 			},
 			shared_secret: SharedSecret::from_bytes([0; 32]),
-		}, [0; 32], PaymentHash([0; 32]), 100, TEST_FINAL_CLTV + 1, None, true, None, false, current_height);
+		}, [0; 32], PaymentHash([0; 32]), 100, TEST_FINAL_CLTV + 1, None, true, None, false, current_height, &test_logger);
 
 		// Should not return an error as this condition:
 		// https://github.com/lightning/bolts/blob/4dcc377209509b13cf89a4b91fde7d478f5b46d8/04-onion-routing.md?plain=1#L334

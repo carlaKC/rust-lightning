@@ -286,23 +286,25 @@ pub(super) fn create_fwd_pending_htlc_info(
 pub(super) fn create_recv_pending_htlc_info(
 	hop_data: onion_utils::Hop, shared_secret: [u8; 32], payment_hash: PaymentHash,
 	amt_msat: u64, cltv_expiry: u32, phantom_shared_secret: Option<[u8; 32]>, allow_underpay: bool,
-	counterparty_skimmed_fee_msat: Option<u64>, incoming_accountable: bool, current_height: u32
+	counterparty_skimmed_fee_msat: Option<u64>, incoming_accountable: bool, current_height: u32,
+	logger: &dyn Logger,
 ) -> Result<PendingHTLCInfo, InboundHTLCErr> {
 	let (
 		payment_data, keysend_preimage, custom_tlvs, onion_amt_msat, onion_cltv_expiry,
 		payment_metadata, payment_context, requires_blinded_error, has_recipient_created_payment_secret,
-		invoice_request, trampoline_shared_secret,
+		invoice_request, trampoline_shared_secret, upgrade_accountability,
 	) = match hop_data {
 		onion_utils::Hop::Receive { hop_data: msgs::InboundOnionReceivePayload {
 			payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
-			cltv_expiry_height, payment_metadata, ..
+			cltv_expiry_height, payment_metadata, upgrade_accountability,
 		}, .. } =>
 			(payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
-			 cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, None),
+			 cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, None,
+			 upgrade_accountability),
 		onion_utils::Hop::BlindedReceive { hop_data: msgs::InboundOnionBlindedReceivePayload {
 			sender_intended_htlc_amt_msat, total_msat, cltv_expiry_height, payment_secret,
 			intro_node_blinding_point, payment_constraints, payment_context, keysend_preimage,
-			custom_tlvs, invoice_request, upgrade_accountability: _,
+			custom_tlvs, invoice_request, upgrade_accountability,
 		}, .. } => {
 			check_blinded_payment_constraints(
 				sender_intended_htlc_amt_msat, cltv_expiry, &payment_constraints
@@ -317,7 +319,8 @@ pub(super) fn create_recv_pending_htlc_info(
 			let payment_data = msgs::FinalOnionHopData { payment_secret, total_msat };
 			(Some(payment_data), keysend_preimage, custom_tlvs,
 			 sender_intended_htlc_amt_msat, cltv_expiry_height, None, Some(payment_context),
-			 intro_node_blinding_point.is_none(), true, invoice_request, None)
+			 intro_node_blinding_point.is_none(), true, invoice_request, None,
+			 upgrade_accountability)
 		}
 		onion_utils::Hop::TrampolineReceive {
 			ref outer_hop_data,
@@ -329,7 +332,9 @@ pub(super) fn create_recv_pending_htlc_info(
 		} => {
 			check_trampoline_payment_constraints(outer_hop_data, cltv_expiry_height, sender_intended_htlc_amt_msat)?;
 			(payment_data, keysend_preimage, custom_tlvs, sender_intended_htlc_amt_msat,
-				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes()))
+				cltv_expiry_height, payment_metadata, None, false, keysend_preimage.is_none(), None, Some(trampoline_shared_secret.secret_bytes()),
+				// upgrade_accountability is not relayed via trampoline.
+				false)
 		},
 		onion_utils::Hop::TrampolineBlindedReceive {
 			trampoline_shared_secret,
@@ -337,7 +342,7 @@ pub(super) fn create_recv_pending_htlc_info(
 			trampoline_hop_data: msgs::InboundOnionBlindedReceivePayload {
 				sender_intended_htlc_amt_msat, total_msat, cltv_expiry_height, payment_secret,
 				intro_node_blinding_point, payment_constraints, payment_context, keysend_preimage,
-				custom_tlvs, invoice_request, upgrade_accountability: _,
+				custom_tlvs, invoice_request, upgrade_accountability,
 			}, ..
 		} => {
 			check_blinded_payment_constraints(
@@ -360,7 +365,8 @@ pub(super) fn create_recv_pending_htlc_info(
 			})?;
 			(Some(payment_data), keysend_preimage, custom_tlvs,
 				sender_intended_htlc_amt_msat, cltv_expiry_height, None, Some(payment_context),
-				intro_node_blinding_point.is_none(), true, invoice_request, Some(trampoline_shared_secret.secret_bytes()))
+				intro_node_blinding_point.is_none(), true, invoice_request, Some(trampoline_shared_secret.secret_bytes()),
+				upgrade_accountability)
 		},
 		onion_utils::Hop::Forward { .. } => {
 			return Err(InboundHTLCErr {
@@ -468,6 +474,21 @@ pub(super) fn create_recv_pending_htlc_info(
 			msg: "We require payment_secrets",
 		});
 	};
+	// BOLT 4 receiver validation rule (lightning/bolts#1280): if `accountable` was set on the
+	// incoming `update_add_htlc`, the sender should have included `upgrade_accountability` in
+	// the onion payload (or the recipient must have set the accountable marker on their own
+	// invoice). We can't easily check the latter from this function, so we conservatively log
+	// a warning when the marker is absent. In read-only mode we still accept the HTLC; a
+	// follow-up can change this to a hard error once the spec stabilizes.
+	if incoming_accountable && !upgrade_accountability {
+		log_warn!(
+			logger,
+			"Received an accountable HTLC for payment_hash {} but the onion payload did not \
+			 carry upgrade_accountability; an upstream node may have tampered with the signal",
+			payment_hash,
+		);
+	}
+
 	Ok(PendingHTLCInfo {
 		routing,
 		payment_hash,
@@ -564,6 +585,7 @@ pub fn peel_payment_onion<NS: NodeSigner, L: Logger, T: secp256k1::Verification>
 				hop, shared_secret, msg.payment_hash, msg.amount_msat, msg.cltv_expiry,
 				None, allow_skimmed_fees, msg.skimmed_fee_msat,
 				msg.accountable.unwrap_or(false), cur_height,
+				&logger,
 			)?
 		}
 	})

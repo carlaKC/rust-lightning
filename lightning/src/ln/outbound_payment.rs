@@ -3026,10 +3026,11 @@ mod tests {
 	use crate::events::{Event, PathFailure, PaymentFailureReason};
 	use crate::ln::channelmanager::PaymentId;
 	use crate::ln::inbound_payment::ExpandedKey;
+	use crate::ln::msgs::TrampolineOnionPacket;
 	use crate::ln::outbound_payment::RecipientOnionFields;
 	use crate::ln::outbound_payment::{
-		Bolt12PaymentError, OutboundPayments, PendingOutboundPayment, RecipientCustomTlvs, Retry,
-		RetryableSendFailure, StaleExpiration,
+		Bolt12PaymentError, NextTrampolineHopInfo, OutboundPayments, PendingOutboundPayment,
+		RecipientCustomTlvs, Retry, RetryableSendFailure, StaleExpiration, TrampolineForwardInfo,
 	};
 	#[cfg(feature = "std")]
 	use crate::offers::invoice::DEFAULT_RELATIVE_EXPIRY;
@@ -3044,13 +3045,40 @@ mod tests {
 	};
 	use crate::sync::{Arc, Mutex, RwLock};
 	use crate::types::features::{Bolt12InvoiceFeatures, ChannelFeatures, NodeFeatures};
-	use crate::types::payment::{PaymentHash, PaymentPreimage};
+	use crate::types::payment::{PaymentHash, PaymentPreimage, PaymentSecret};
 	use crate::util::errors::APIError;
 	use crate::util::hash_tables::new_hash_map;
 	use crate::util::logger::WithContext;
 	use crate::util::test_utils;
 
 	use alloc::collections::VecDeque;
+
+	#[derive(Copy, Clone)]
+	enum SendMode {
+		Initial,
+		Retry,
+		TrampolineForward,
+	}
+
+	fn test_trampoline_forward_info(amount_msat: u64) -> TrampolineForwardInfo {
+		let secp = Secp256k1::new();
+		let secret = SecretKey::from_slice(&[42; 32]).unwrap();
+		TrampolineForwardInfo {
+			next_hop_info: NextTrampolineHopInfo {
+				onion_packet: TrampolineOnionPacket {
+					version: 0,
+					public_key: PublicKey::from_secret_key(&secp, &secret),
+					hop_data: vec![0; 650],
+					hmac: [0; 32],
+				},
+				blinding_point: None,
+				amount_msat,
+				cltv_expiry_height: 0,
+			},
+			previous_hop_data: Vec::new(),
+			forwarding_fee_msat: 0,
+		}
+	}
 
 	#[test]
 	#[rustfmt::skip]
@@ -3079,12 +3107,14 @@ mod tests {
 	#[test]
 	#[cfg(feature = "std")]
 	fn fails_paying_after_expiration() {
-		do_fails_paying_after_expiration(false);
-		do_fails_paying_after_expiration(true);
+		do_fails_paying_after_expiration(SendMode::Initial);
+		do_fails_paying_after_expiration(SendMode::Retry);
+		do_fails_paying_after_expiration(SendMode::TrampolineForward);
 	}
+
 	#[cfg(feature = "std")]
 	#[rustfmt::skip]
-	fn do_fails_paying_after_expiration(on_retry: bool) {
+	fn do_fails_paying_after_expiration(mode: SendMode) {
 		let logger = test_utils::TestLogger::new();
 		let logger_ref = &logger;
 		let log = WithContext::from(&logger_ref, None, None, Some(PaymentHash([0; 32])));
@@ -3102,36 +3132,49 @@ mod tests {
 			).with_expiry_time(past_expiry_time);
 		let expired_route_params = RouteParameters::from_payment_params_and_value(payment_params, 0);
 		let pending_events = Mutex::new(VecDeque::new());
-		if on_retry {
-			outbound_payments.add_new_pending_payment(PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0),
-				PaymentId([0; 32]), None, &Route { paths: vec![], route_params: None },
-				Some(Retry::Attempts(1)), Some(expired_route_params.payment_params.clone()),
-				&&keys_manager, 0, None, None).unwrap();
-			outbound_payments.find_route_and_send_payment(
-				PaymentHash([0; 32]), PaymentId([0; 32]), expired_route_params, &&router, vec![],
-				&|| InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0, &pending_events,
-				&|_| Ok(()), &log);
-			let events = pending_events.lock().unwrap();
-			assert_eq!(events.len(), 1);
-			if let Event::PaymentFailed { ref reason, .. } = events[0].0 {
-				assert_eq!(reason.unwrap(), PaymentFailureReason::PaymentExpired);
-			} else { panic!("Unexpected event"); }
-		} else {
-			let err = outbound_payments.send_payment(
-				PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0), PaymentId([0; 32]),
-				Retry::Attempts(0), expired_route_params, &&router, vec![], || InFlightHtlcs::new(),
-				&&keys_manager, &&keys_manager, 0, &pending_events, |_| Ok(()), &log).unwrap_err();
-			if let RetryableSendFailure::PaymentExpired = err { } else { panic!("Unexpected error"); }
+		match mode {
+			SendMode::Retry => {
+				outbound_payments.add_new_pending_payment(PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0),
+					PaymentId([0; 32]), None, &Route { paths: vec![], route_params: None },
+					Some(Retry::Attempts(1)), Some(expired_route_params.payment_params.clone()),
+					&&keys_manager, 0, None, None).unwrap();
+				outbound_payments.find_route_and_send_payment(
+					PaymentHash([0; 32]), PaymentId([0; 32]), expired_route_params, &&router, vec![],
+					&|| InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0, &pending_events,
+					&|_| Ok(()), &log);
+				let events = pending_events.lock().unwrap();
+				assert_eq!(events.len(), 1);
+				if let Event::PaymentFailed { ref reason, .. } = events[0].0 {
+					assert_eq!(reason.unwrap(), PaymentFailureReason::PaymentExpired);
+				} else { panic!("Unexpected event"); }
+			},
+			SendMode::Initial => {
+				let err = outbound_payments.send_payment(
+					PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0), PaymentId([0; 32]),
+					Retry::Attempts(0), expired_route_params, &&router, vec![], || InFlightHtlcs::new(),
+					&&keys_manager, &&keys_manager, 0, &pending_events, |_| Ok(()), &log).unwrap_err();
+				if let RetryableSendFailure::PaymentExpired = err { } else { panic!("Unexpected error"); }
+			},
+			SendMode::TrampolineForward => {
+				let err = outbound_payments.send_payment_for_trampoline_forward(
+					PaymentId([0; 32]), PaymentHash([0; 32]), PaymentSecret([0; 32]),
+					test_trampoline_forward_info(0), Retry::Attempts(0), expired_route_params,
+					&&router, vec![], || InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0,
+					&pending_events, |_| Ok(()), &log).unwrap_err();
+				if let RetryableSendFailure::PaymentExpired = err { } else { panic!("Unexpected error"); }
+			},
 		}
 	}
 
 	#[test]
 	fn find_route_error() {
-		do_find_route_error(false);
-		do_find_route_error(true);
+		do_find_route_error(SendMode::Initial);
+		do_find_route_error(SendMode::Retry);
+		do_find_route_error(SendMode::TrampolineForward);
 	}
+
 	#[rustfmt::skip]
-	fn do_find_route_error(on_retry: bool) {
+	fn do_find_route_error(mode: SendMode) {
 		let logger = test_utils::TestLogger::new();
 		let logger_ref = &logger;
 		let log = WithContext::from(&logger_ref, None, None, Some(PaymentHash([0; 32])));
@@ -3148,25 +3191,37 @@ mod tests {
 		router.expect_find_route(route_params.clone(), Err(""));
 
 		let pending_events = Mutex::new(VecDeque::new());
-		if on_retry {
-			outbound_payments.add_new_pending_payment(PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0),
-				PaymentId([0; 32]), None, &Route { paths: vec![], route_params: None },
-				Some(Retry::Attempts(1)), Some(route_params.payment_params.clone()),
-				&&keys_manager, 0, None, None).unwrap();
-			outbound_payments.find_route_and_send_payment(
-				PaymentHash([0; 32]), PaymentId([0; 32]), route_params, &&router, vec![],
-				&|| InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0, &pending_events,
-				&|_| Ok(()), &log);
-			let events = pending_events.lock().unwrap();
-			assert_eq!(events.len(), 1);
-			if let Event::PaymentFailed { .. } = events[0].0 { } else { panic!("Unexpected event"); }
-		} else {
-			let err = outbound_payments.send_payment(
-				PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0), PaymentId([0; 32]),
-				Retry::Attempts(0), route_params, &&router, vec![], || InFlightHtlcs::new(),
-				&&keys_manager, &&keys_manager, 0, &pending_events, |_| Ok(()), &log).unwrap_err();
-			if let RetryableSendFailure::RouteNotFound = err {
-			} else { panic!("Unexpected error"); }
+		match mode {
+			SendMode::Retry => {
+				outbound_payments.add_new_pending_payment(PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0),
+					PaymentId([0; 32]), None, &Route { paths: vec![], route_params: None },
+					Some(Retry::Attempts(1)), Some(route_params.payment_params.clone()),
+					&&keys_manager, 0, None, None).unwrap();
+				outbound_payments.find_route_and_send_payment(
+					PaymentHash([0; 32]), PaymentId([0; 32]), route_params, &&router, vec![],
+					&|| InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0, &pending_events,
+					&|_| Ok(()), &log);
+				let events = pending_events.lock().unwrap();
+				assert_eq!(events.len(), 1);
+				if let Event::PaymentFailed { .. } = events[0].0 { } else { panic!("Unexpected event"); }
+			},
+			SendMode::Initial => {
+				let err = outbound_payments.send_payment(
+					PaymentHash([0; 32]), RecipientOnionFields::spontaneous_empty(0), PaymentId([0; 32]),
+					Retry::Attempts(0), route_params, &&router, vec![], || InFlightHtlcs::new(),
+					&&keys_manager, &&keys_manager, 0, &pending_events, |_| Ok(()), &log).unwrap_err();
+				if let RetryableSendFailure::RouteNotFound = err {
+				} else { panic!("Unexpected error"); }
+			},
+			SendMode::TrampolineForward => {
+				let err = outbound_payments.send_payment_for_trampoline_forward(
+					PaymentId([0; 32]), PaymentHash([0; 32]), PaymentSecret([0; 32]),
+					test_trampoline_forward_info(0), Retry::Attempts(0), route_params,
+					&&router, vec![], || InFlightHtlcs::new(), &&keys_manager, &&keys_manager, 0,
+					&pending_events, |_| Ok(()), &log).unwrap_err();
+				if let RetryableSendFailure::RouteNotFound = err {
+				} else { panic!("Unexpected error"); }
+			},
 		}
 	}
 

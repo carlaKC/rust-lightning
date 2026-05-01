@@ -5521,6 +5521,15 @@ impl<
 			payment_id,
 		);
 		let onion_result = if let Some(trampoline_forward_info) = trampoline_forward_info {
+			// When we're sending a trampoline related payment, it's not associated with our
+			// typical payment modes (it's to the next trampoline).
+			debug_assert!(keysend_preimage.is_none(), "trampoline forwards can't be keysends");
+			debug_assert!(
+				invoice_request.is_none(),
+				"trampoline forwards can't be invoice requests"
+			);
+			debug_assert!(bolt12_invoice.is_none(), "trampoline forwards can't be bot12 payments");
+
 			onion_utils::create_trampoline_forward_onion(
 				&self.secp_ctx,
 				&path,

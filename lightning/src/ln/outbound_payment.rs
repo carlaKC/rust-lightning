@@ -1682,6 +1682,7 @@ impl OutboundPayments {
 		L: Logger,
 	>(
 		&self, payment_id: PaymentId, payment_hash: PaymentHash,
+		inter_trampoline_payment_secret: PaymentSecret,
 		trampoline_forward_info: TrampolineForwardInfo, retry_strategy: Retry,
 		mut route_params: RouteParameters, router: &R, first_hops: Vec<ChannelDetails>,
 		inflight_htlcs: IH, entropy_source: &ES, node_signer: &NS, best_block_height: u32,
@@ -1692,8 +1693,6 @@ impl OutboundPayments {
 		IH: Fn() -> InFlightHtlcs,
 		SP: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
-		let inter_trampoline_payment_secret =
-			PaymentSecret(entropy_source.get_secure_random_bytes());
 		let recipient_onion = RecipientOnionFields::secret_only(
 			inter_trampoline_payment_secret,
 			trampoline_forward_info.next_hop_info.amount_msat,

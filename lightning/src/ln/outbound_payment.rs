@@ -2161,6 +2161,10 @@ impl OutboundPayments {
 	where
 		F: Fn(SendAlongPathArgs) -> Result<(), APIError>,
 	{
+		debug_assert!(
+			keysend_preimage.is_none() || trampoline_forward_info.is_none(),
+			"we only support trampoline to blinded recipients, so do not expect keysends",
+		);
 		if route.paths.len() < 1 {
 			return Err(PaymentSendFailure::ParameterError(APIError::InvalidRoute{err: "There must be at least one path to send over".to_owned()}));
 		}
@@ -2168,9 +2172,6 @@ impl OutboundPayments {
 			&& !route.paths.iter().any(|p| p.blinded_tail.is_some())
 		{
 			return Err(PaymentSendFailure::ParameterError(APIError::APIMisuseError{err: "Payment secret is required for multi-path payments".to_owned()}));
-		}
-		if trampoline_forward_info.is_some() && keysend_preimage.is_some() {
-			return Err(PaymentSendFailure::ParameterError(APIError::APIMisuseError{err: "Trampoline forwards cannot include keysend preimage".to_owned()}));
 		}
 		let our_node_id = node_signer.get_node_id(Recipient::Node).unwrap(); // TODO no unwrap
 		let mut path_errs = Vec::with_capacity(route.paths.len());
@@ -2207,7 +2208,7 @@ impl OutboundPayments {
 			let path_res = send_payment_along_path(SendAlongPathArgs {
 				path: &path, payment_hash: &payment_hash, recipient_onion,
 				cur_height, payment_id, keysend_preimage: &keysend_preimage, invoice_request,
-				bolt12_invoice, trampoline_forward_info,  hold_htlc_at_next_hop: hold_htlcs_at_next_hop,
+				bolt12_invoice, trampoline_forward_info, hold_htlc_at_next_hop: hold_htlcs_at_next_hop,
 				session_priv_bytes: *session_priv_bytes
 			});
 			results.push(path_res);

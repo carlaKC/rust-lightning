@@ -2672,13 +2672,17 @@ pub(super) fn compute_trampoline_session_priv(outer_onion_session_priv: &SecretK
 /// Builds a payment onion for an inter-trampoline forward.
 pub(crate) fn create_trampoline_forward_onion<T: secp256k1::Signing>(
 	secp_ctx: &Secp256k1<T>, path: &Path, session_priv: &SecretKey, payment_hash: &PaymentHash,
-	recipient_onion: &RecipientOnionFields, keysend_preimage: &Option<PaymentPreimage>,
-	trampoline_forward_info: &NextTrampolineHopInfo, prng_seed: [u8; 32],
+	recipient_onion: &RecipientOnionFields, trampoline_forward_info: &NextTrampolineHopInfo,
+	prng_seed: [u8; 32],
 ) -> Result<(msgs::OnionPacket, u64, u32), APIError> {
 	// Inter-trampoline payments should always be cleartext because we need to know the node id
 	// that we need to route to. LDK does not currently support the legacy "trampoline to blinded
 	// path" approach, where we get a blinded path to pay inside of our trampoline onion.
 	debug_assert!(path.blinded_tail.is_none(), "trampoline should not be blinded");
+	debug_assert!(
+		path.final_value_msat() == trampoline_forward_info.amount_msat,
+		"trampoline path is not equal to next trampoline's required amount"
+	);
 
 	let mut res: Vec<msgs::OutboundOnionPayload> = Vec::with_capacity(path.hops.len());
 
@@ -2696,7 +2700,7 @@ pub(crate) fn create_trampoline_forward_onion<T: secp256k1::Signing>(
 		// of the current block height. This is because we need to create an onion that terminates
 		// at the next trampoline with the cltv we've been told to give them.
 		trampoline_forward_info.cltv_expiry_height,
-		keysend_preimage,
+		&None,
 		None,
 		|action, payload| match action {
 			PayloadCallbackAction::PushBack => res.push(payload),

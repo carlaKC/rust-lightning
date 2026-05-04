@@ -1041,8 +1041,27 @@ mod fuzzy_onion_utils {
 				.0
 			},
 			HTLCSource::TrampolineForward { outbound_payment, .. } => {
-				let dispatch = outbound_payment.as_ref()
-					.expect("processing trampoline onion failure for forward with no outbound payment details");
+				let dispatch =
+					match outbound_payment.as_ref() {
+						Some(dispatch) => dispatch,
+						None => {
+							debug_assert!(false,
+							"Trampoline onion failure on forward with no outbound payment details");
+							return DecodedOnionFailure {
+								network_update: None,
+								short_channel_id: None,
+								payment_failed_permanently: false,
+								failed_within_blinded_path: false,
+								hold_times: vec![],
+								onion_error_code: None,
+								#[cfg(any(test, feature = "_test_utils"))]
+								onion_error_data: None,
+								trampoline_peeled_packet: None,
+								#[cfg(test)]
+								attribution_failed_channel: None,
+							};
+						},
+					};
 
 				let (mut decoded, peeled_packet) = process_onion_failure_inner(
 					secp_ctx,

@@ -17334,7 +17334,7 @@ impl<
 					.map(|(preimage, secret, _no_metadata)| (preimage, secret))
 				};
 
-				let (result, context) = match invoice_request {
+				let (result, _context) = match invoice_request {
 					InvoiceRequestVerifiedFromOffer::DerivedKeys(request) => {
 						let result = self.flow.create_invoice_builder_from_invoice_request_with_keys(
 							&self.router,
@@ -17396,7 +17396,9 @@ impl<
 				Some(match result {
 					Ok(invoice) => (
 						OffersMessage::Invoice(invoice),
-						responder.respond_with_reply_path(context),
+						// Respond WITHOUT a reply_path: Eclair's FinalPayload.validate rejects an
+						// invoice onion message that also carries a reply_path (interop test).
+						responder.respond(),
 					),
 					Err(error) => (
 						OffersMessage::InvoiceError(error),
